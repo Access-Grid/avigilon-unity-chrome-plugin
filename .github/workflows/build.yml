@@ -1,0 +1,163 @@
+name: Build Bridge & Package Extension
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  # --- Build the Python bridge binary for each platform ---
+  build-bridge:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: macos
+          - os: ubuntu-22.04
+            platform: linux
+          - os: windows-latest
+            platform: windows
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: bridge/requirements.txt
+
+      - name: Install Tk libs (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get install -y python3-tk
+
+      - name: Install Python dependencies
+        run: pip install -r bridge/requirements.txt pyinstaller
+
+      - name: Install UPX (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get install -y upx-ucl
+
+      - name: Install UPX (macOS)
+        if: matrix.platform == 'macos'
+        run: brew install upx
+
+      - name: Install UPX (Windows)
+        if: matrix.platform == 'windows'
+        run: choco install upx --no-progress -y
+
+      - name: Build with PyInstaller
+        working-directory: bridge
+        run: pyinstaller AvigilonBridge.spec
+
+      # ---- Platform packaging ----
+
+      - name: Package (macOS)
+        if: matrix.platform == 'macos'
+        run: cd bridge/dist && zip -r AvigilonBridge-macos.zip AvigilonBridge.app
+
+      - name: Package (Linux)
+        if: matrix.platform == 'linux'
+        run: cd bridge/dist && tar -czf AvigilonBridge-linux.tar.gz AvigilonBridge
+
+      - name: Rename (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Rename-Item bridge\dist\AvigilonBridge.exe AvigilonBridge-windows.exe
+
+      # ---- Upload ----
+
+      - name: Upload artifact (macOS)
+        if: matrix.platform == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-macos
+          path: bridge/dist/AvigilonBridge-macos.zip
+
+      - name: Upload artifact (Linux)
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-linux
+          path: bridge/dist/AvigilonBridge-linux.tar.gz
+
+      - name: Upload artifact (Windows)
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-windows
+          path: bridge/dist/AvigilonBridge-windows.exe
+
+  # --- Package the Chrome extension ---
+  build-extension:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package Chrome extension
+        run: |
+          cd chrome-extension
+          zip -r ../AvigilonUnitySync-chrome-extension.zip . -x '*.DS_Store'
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-extension
+          path: AvigilonUnitySync-chrome-extension.zip
+
+  # --- Run tests ---
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: bridge/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r bridge/requirements.txt
+
+      - name: Run bridge tests
+        working-directory: bridge
+        run: python -m pytest tests/ -v
+
+  # ---- Rolling release ----
+  release:
+    needs: [build-bridge, build-extension, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Publish latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes 2>/dev/null || true
+          git tag -f latest ${{ github.sha }}
+          git push origin latest --force
+
+          gh release create latest \
+            --title "Latest Build" \
+            --notes "Built from \`${{ github.sha }}\` on \`${{ github.ref_name }}\`" \
+            --prerelease \
+            dist/AvigilonBridge-macos.zip \
+            dist/AvigilonBridge-linux.tar.gz \
+            dist/AvigilonBridge-windows.exe \
+            dist/AvigilonUnitySync-chrome-extension.zip
