@@ -46,8 +46,11 @@
     button.primary:hover { background: #1d4ed8; }
     button:disabled { opacity: .5; cursor: not-allowed; }
     .sync-btn { width: 100%; }
-    #log { font-family: monospace; font-size: 11px; color: #6b7280; margin-top: 8px;
-           max-height: 80px; overflow-y: auto; }
+    #log {
+      font-family: monospace; font-size: 11px; color: #6b7280; margin-top: 8px;
+      max-height: 100px; overflow-y: auto; white-space: nowrap;
+    }
+    .log-line { overflow: hidden; text-overflow: ellipsis; line-height: 1.6; }
     .tabs { display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 12px; }
     .tab {
       padding: 8px 16px; cursor: pointer; border-bottom: 2px solid transparent;
@@ -56,6 +59,12 @@
     .tab.active { color: #2563eb; border-bottom-color: #2563eb; }
     .tab-content { display: none; }
     .tab-content.active { display: block; }
+    .feedback {
+      font-size: 12px; margin-top: 8px; padding: 8px 10px; border-radius: 6px; display: none;
+    }
+    .feedback.ok { display: block; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
+    .feedback.error { display: block; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
+    .feedback.loading { display: block; background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
   </style>
 </head>
 <body>
@@ -106,6 +115,7 @@
       <button class="primary" id="btn-save">Save</button>
       <button id="btn-test-bridge">Test Bridge</button>
     </div>
+    <div id="bridge-feedback" class="feedback"></div>
   </div>
 
   <script src="popup.js"></script>

@@ -11,7 +11,12 @@ document.querySelectorAll('.tab').forEach(tab => {
 function log(msg) {
   const el = document.getElementById('log');
   const ts = new Date().toLocaleTimeString();
-  el.textContent = `[${ts}] ${msg}\n` + el.textContent;
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.textContent = `${ts}  ${msg}`;
+  el.prepend(line);
+  // Keep max 50 lines
+  while (el.children.length > 50) el.removeChild(el.lastChild);
 }
 
 function setStatus(elId, state, text) {
@@ -22,19 +27,29 @@ function setStatus(elId, state, text) {
   bar.querySelector('span').textContent = text;
 }
 
+function setFeedback(elId, state, text) {
+  const el = document.getElementById(elId);
+  el.className = `feedback ${state}`;
+  el.textContent = text;
+}
+
 // Check bridge health
-async function checkBridge() {
+function checkBridge(showFeedback) {
+  if (showFeedback) setFeedback('bridge-feedback', 'loading', 'Connecting to bridge...');
+
   chrome.runtime.sendMessage({ type: 'CHECK_BRIDGE' }, (resp) => {
     if (resp?.healthy) {
       setStatus('bridge-status', 'ok', 'Bridge connected (localhost:19780)');
+      if (showFeedback) setFeedback('bridge-feedback', 'ok', 'Bridge is reachable');
     } else {
       setStatus('bridge-status', 'error', 'Bridge not reachable — start the Avigilon Bridge app');
+      if (showFeedback) setFeedback('bridge-feedback', 'error', 'Bridge not reachable — is the Avigilon Bridge app running?');
     }
   });
 }
 
 // Load sync status
-async function loadStatus() {
+function loadStatus() {
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (resp) => {
     if (!resp) return;
 
@@ -59,7 +74,7 @@ async function loadStatus() {
 }
 
 // Load config
-async function loadConfig() {
+function loadConfig() {
   chrome.runtime.sendMessage({ type: 'GET_CONFIG' }, (config) => {
     if (!config) return;
     const ag = config.accessgrid || {};
@@ -80,13 +95,20 @@ document.getElementById('btn-save').addEventListener('click', () => {
   };
   chrome.runtime.sendMessage({ type: 'SAVE_CONFIG', config }, () => {
     log('Configuration saved');
+    setFeedback('bridge-feedback', 'ok', 'Configuration saved');
   });
 });
 
-// Test bridge
+// Test bridge — reactive with feedback
 document.getElementById('btn-test-bridge').addEventListener('click', () => {
-  checkBridge();
-  log('Checking bridge connection...');
+  const btn = document.getElementById('btn-test-bridge');
+  btn.disabled = true;
+  btn.textContent = 'Testing...';
+  checkBridge(true);
+  setTimeout(() => {
+    btn.disabled = false;
+    btn.textContent = 'Test Bridge';
+  }, 2000);
 });
 
 // Force sync
@@ -100,15 +122,15 @@ document.getElementById('btn-sync').addEventListener('click', () => {
     btn.disabled = false;
     btn.textContent = 'Run Sync Now';
     if (resp?.result) {
-      log(`Sync complete: ${resp.result.new} new, ${resp.result.deleted} deleted, ${resp.result.statusChanges} status changes`);
+      log(`Done: +${resp.result.new} new, -${resp.result.deleted} del, ${resp.result.statusChanges} status, ${resp.result.fieldChanges} fields (${resp.result.duration}ms)`);
     } else {
-      log('Sync returned no result (check bridge connection)');
+      log('No result — check bridge connection');
     }
     loadStatus();
   });
 });
 
 // Initialize
-checkBridge();
+checkBridge(false);
 loadStatus();
 loadConfig();
