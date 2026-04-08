@@ -29,12 +29,12 @@ Usage:
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import logging
 import os
 import secrets
 import ssl
-import subprocess
 import sys
 import tempfile
 import uuid
@@ -738,7 +738,15 @@ def card_formats_json():
 # ---------------------------------------------------------------------------
 
 def generate_self_signed_cert(cert_dir):
-    """Generate a self-signed cert + key for HTTPS."""
+    """Generate a self-signed cert + key for HTTPS using Python's cryptography library.
+
+    Works on all platforms (no openssl CLI dependency).
+    """
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
     cert_path = os.path.join(cert_dir, 'cert.pem')
     key_path = os.path.join(cert_dir, 'key.pem')
 
@@ -746,12 +754,42 @@ def generate_self_signed_cert(cert_dir):
         return cert_path, key_path
 
     logger.info("Generating self-signed certificate...")
-    subprocess.run([
-        'openssl', 'req', '-x509', '-newkey', 'rsa:2048',
-        '-keyout', key_path, '-out', cert_path,
-        '-days', '365', '-nodes',
-        '-subj', '/CN=fake-avigilon/O=AccessGrid/C=US',
-    ], check=True, capture_output=True)
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, 'fake-avigilon'),
+        x509.NameAttribute(NameOID.ORGANIZATION_NAME, 'AccessGrid'),
+        x509.NameAttribute(NameOID.COUNTRY_NAME, 'US'),
+    ])
+
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(timezone.utc))
+        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
+        .add_extension(
+            x509.SubjectAlternativeName([
+                x509.DNSName('localhost'),
+                x509.IPAddress(ipaddress.IPv4Address('127.0.0.1')),
+            ]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+
+    with open(key_path, 'wb') as f:
+        f.write(key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        ))
+
+    with open(cert_path, 'wb') as f:
+        f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     logger.info(f"Certificate written to {cert_path}")
     return cert_path, key_path
