@@ -146,7 +146,8 @@ async function bridgeFetch(path, options = {}) {
     try { parsed = JSON.parse(respText); } catch { parsed = {}; }
     const errMsg = parsed.error || parsed.detail || `Bridge HTTP ${resp.status}`;
     const errType = parsed.type ? ` (${parsed.type})` : '';
-    throw new Error(`${errMsg}${errType}`);
+    const hint = resp.status === 404 ? ' — bridge may need restart after update' : '';
+    throw new Error(`${errMsg}${errType}${hint}`);
   }
 
   try {
