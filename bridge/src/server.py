@@ -7,9 +7,10 @@ deals with self-signed certificates.
 """
 
 import logging
+import time
 from typing import Optional
 
-from flask import Flask, jsonify, request
+from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 
 from .plasec_client import PlaSecClient, PlaSecAuthError
@@ -20,6 +21,31 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app, origins=['chrome-extension://*'])
+
+
+@app.before_request
+def _log_request():
+    g.start_time = time.time()
+    body = ''
+    if request.content_length and request.content_length > 0:
+        body = request.get_data(as_text=True)
+        if len(body) > 300:
+            body = body[:300] + '...'
+        body = f' body={body}'
+    logger.info(f"→ {request.method} {request.path}{body}")
+
+
+@app.after_request
+def _log_response(response):
+    elapsed = (time.time() - g.get('start_time', time.time())) * 1000
+    body = ''
+    if response.content_type and 'json' in response.content_type:
+        resp_data = response.get_data(as_text=True)
+        if len(resp_data) > 300:
+            resp_data = resp_data[:300] + '...'
+        body = f' {resp_data}'
+    logger.info(f"← {response.status_code} {request.path} ({elapsed:.0f}ms){body}")
+    return response
 
 # Shared client instance — created on first use or config change
 _client: Optional[PlaSecClient] = None
