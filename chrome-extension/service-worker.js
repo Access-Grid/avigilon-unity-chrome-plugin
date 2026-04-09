@@ -79,6 +79,25 @@ async function saveConfig(config) {
   await chrome.storage.local.set({ config });
 }
 
+// ---------------------------------------------------------------------------
+// Pass cache — persists across service worker restarts in chrome.storage.local
+//
+// Tracks which AG cards we know about and their linked Avigilon tokens.
+// Deletions only happen for entries that were previously cached, preventing
+// mass-deletion if Avigilon returns empty due to an error.
+//
+// Schema: { "passCache": { "employeeId:tokenId": { agCardId, fullName, lastSeen } } }
+// ---------------------------------------------------------------------------
+
+async function getPassCache() {
+  const result = await chrome.storage.local.get('passCache');
+  return result.passCache || {};
+}
+
+async function savePassCache(cache) {
+  await chrome.storage.local.set({ passCache: cache });
+}
+
 async function getAGClient() {
   const config = await getConfig();
   const ag = config.accessgrid || {};
@@ -225,7 +244,7 @@ async function buildSnapshot(agClient, templateId) {
   return { avigilonIdentities, avigilonTokens, agCardsByEmployee, agCardsByToken, agCardMap };
 }
 
-async function phase1NewIdentities(agClient, templateId, snapshot) {
+async function phase1NewIdentities(agClient, templateId, snapshot, passCache) {
   let provisioned = 0;
   let skipped = 0;
   const { avigilonIdentities, avigilonTokens, agCardsByToken } = snapshot;
@@ -241,6 +260,13 @@ async function phase1NewIdentities(agClient, templateId, snapshot) {
       // Per-token check: does an AG card already exist for this specific token?
       const tokenKey = `${iid}:${token.id}`;
       if (agCardsByToken.has(tokenKey)) {
+        // Update cache lastSeen for existing cards
+        const card = agCardsByToken.get(tokenKey);
+        passCache[tokenKey] = {
+          agCardId: card.id,
+          fullName: card.fullName || '',
+          lastSeen: new Date().toISOString(),
+        };
         log('DEBUG', `  ${iid}/${token.id}: AG card already exists, skipping`);
         continue;
       }
@@ -279,9 +305,17 @@ async function phase1NewIdentities(agClient, templateId, snapshot) {
         if (cardNumber) params.cardNumber = cardNumber;
 
         log('INFO', `  Provisioning: ${fullName} (${iid}), token=${token.id}, card#=${cardNumber}, email=${email}`);
-        await agClient.accessCards.provision(params);
+        const result = await agClient.accessCards.provision(params);
         provisioned++;
-        log('INFO', `  Provisioned AG card for ${fullName} (token ${token.id})`);
+
+        // Cache the new card
+        passCache[tokenKey] = {
+          agCardId: result.id,
+          fullName,
+          lastSeen: now,
+        };
+
+        log('INFO', `  Provisioned AG card ${result.id} for ${fullName} (token ${token.id})`);
       } catch (e) {
         log('ERROR', `  Failed to provision for ${fullName} (${iid}/${token.id}): ${e.message}`);
       }
@@ -344,68 +378,64 @@ async function phase2StatusChanges(agClient, snapshot) {
   return updated;
 }
 
-async function phase3Deletions(agClient, snapshot) {
+async function phase3Deletions(agClient, snapshot, passCache) {
   let deleted = 0;
-  const { avigilonIdentities, avigilonTokens, agCardsByEmployee } = snapshot;
+  const { avigilonIdentities, avigilonTokens } = snapshot;
 
   log('INFO', 'Phase 3: Checking for deletions...');
 
-  for (const [employeeId, cards] of agCardsByEmployee) {
-    // Identity completely gone from Avigilon — delete all cards
+  // Safety check: if Avigilon returned 0 identities, something is wrong.
+  // Skip deletions to prevent mass-deletion from a bad response.
+  if (avigilonIdentities.size === 0) {
+    log('WARN', 'Phase 3: Avigilon returned 0 identities — skipping deletions (likely an error)');
+    return 0;
+  }
+
+  // Walk the cache — only delete cards we previously knew about
+  for (const [tokenKey, cached] of Object.entries(passCache)) {
+    const [employeeId, tokenId] = tokenKey.split(':');
+    if (!employeeId || !tokenId) continue;
+
+    const agCardId = cached.agCardId;
+    if (!agCardId) continue;
+
+    let shouldDelete = false;
+    let reason = '';
+
     if (!avigilonIdentities.has(employeeId)) {
-      for (const card of cards) {
-        if ((card.state || '').toLowerCase() === 'deleted') continue;
-        try {
-          log('INFO', `  Deleting card ${card.id} — identity ${employeeId} gone from Avigilon`);
-          await agClient.accessCards.delete({ cardId: card.id });
-          deleted++;
-        } catch (e) {
-          log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
-        }
+      // Identity gone from Avigilon
+      shouldDelete = true;
+      reason = `identity ${employeeId} gone from Avigilon`;
+    } else {
+      // Identity exists — check the specific token
+      const tokens = avigilonTokens.get(employeeId) || [];
+      const token = tokens.find(t => t.id === tokenId);
+
+      if (!token) {
+        // Token removed from identity
+        shouldDelete = true;
+        reason = `token ${tokenId} gone from identity ${employeeId}`;
+      } else if ((token.embossed_number || '').toLowerCase() !== 'accessgrid') {
+        // Token no longer marked AccessGrid
+        shouldDelete = true;
+        reason = `token ${tokenId} no longer AccessGrid (embossed=${token.embossed_number})`;
       }
-      continue;
     }
 
-    // Identity exists — check each card's linked token
-    const tokens = avigilonTokens.get(employeeId) || [];
-    const tokenIds = new Set(tokens.map(t => t.id));
-    const agTokenIds = new Set(
-      tokens.filter(t => (t.embossed_number || '').toLowerCase() === 'accessgrid').map(t => t.id)
-    );
-
-    for (const card of cards) {
-      if ((card.state || '').toLowerCase() === 'deleted') continue;
-
-      const linkedTokenId = (card.metadata || {}).avigilon_token_id;
-      if (linkedTokenId) {
-        // Token-linked card: delete if the token is gone or no longer AccessGrid
-        if (!tokenIds.has(linkedTokenId)) {
-          try {
-            log('INFO', `  Deleting card ${card.id} — linked token ${linkedTokenId} gone from Avigilon`);
-            await agClient.accessCards.delete({ cardId: card.id });
-            deleted++;
-          } catch (e) {
-            log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
-          }
-        } else if (!agTokenIds.has(linkedTokenId)) {
-          try {
-            log('INFO', `  Deleting card ${card.id} — linked token ${linkedTokenId} no longer AccessGrid`);
-            await agClient.accessCards.delete({ cardId: card.id });
-            deleted++;
-          } catch (e) {
-            log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
-          }
-        }
-      } else {
-        // Legacy card without metadata — fall back to checking if any AG token exists
-        if (agTokenIds.size === 0) {
-          try {
-            log('INFO', `  Deleting card ${card.id} — no AccessGrid tokens for ${employeeId} (legacy card)`);
-            await agClient.accessCards.delete({ cardId: card.id });
-            deleted++;
-          } catch (e) {
-            log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
-          }
+    if (shouldDelete) {
+      try {
+        log('INFO', `  Deleting card ${agCardId} — ${reason}`);
+        await agClient.accessCards.delete({ cardId: agCardId });
+        deleted++;
+        // Remove from cache
+        delete passCache[tokenKey];
+      } catch (e) {
+        // If card is already gone (404), clean up cache silently
+        if (e.message && (e.message.includes('not found') || e.message.includes('404'))) {
+          log('DEBUG', `  Card ${agCardId} already deleted, removing from cache`);
+          delete passCache[tokenKey];
+        } else {
+          log('ERROR', `  Failed to delete AG card ${agCardId}: ${e.message}`);
         }
       }
     }
@@ -545,24 +575,32 @@ async function runSyncCycle() {
 
     const snapshot = await buildSnapshot(agClient, templateId);
 
+    // Load pass cache from persistent storage
+    const passCache = await getPassCache();
+    log('INFO', `Pass cache: ${Object.keys(passCache).length} entries loaded`);
+
     const results = {
-      new: await phase1NewIdentities(agClient, templateId, snapshot),
+      new: await phase1NewIdentities(agClient, templateId, snapshot, passCache),
       statusChanges: await phase2StatusChanges(agClient, snapshot),
-      deleted: await phase3Deletions(agClient, snapshot),
+      deleted: await phase3Deletions(agClient, snapshot, passCache),
       agToAvigilon: await phase4AGToAvigilon(snapshot),
       retried: await phase5Retries(),
       fieldChanges: await phase6FieldChanges(agClient, snapshot),
       duration: Date.now() - startTime,
       identityCount: snapshot.avigilonIdentities.size,
       agCardCount: snapshot.agCardMap.size,
+      cacheSize: Object.keys(passCache).length,
     };
+
+    // Persist updated cache
+    await savePassCache(passCache);
 
     lastSyncTime = new Date().toISOString();
     lastSyncResult = results;
     lastSyncError = null;
 
     log('INFO', `=== Sync cycle complete in ${results.duration}ms ===`);
-    log('INFO', `Results: +${results.new} new, ${results.statusChanges} status, -${results.deleted} deleted, ${results.agToAvigilon} ag→avigilon, ${results.fieldChanges} fields`);
+    log('INFO', `Results: +${results.new} new, ${results.statusChanges} status, -${results.deleted} deleted, ${results.agToAvigilon} ag→avigilon, ${results.fieldChanges} fields, cache=${results.cacheSize}`);
     return results;
 
   } catch (e) {

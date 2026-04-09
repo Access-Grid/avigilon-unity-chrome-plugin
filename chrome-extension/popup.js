@@ -104,6 +104,7 @@ function loadStatus() {
       document.getElementById('m-cards').textContent = r.agCardCount || 0;
       document.getElementById('m-new').textContent = r.new || 0;
       document.getElementById('m-deleted').textContent = r.deleted || 0;
+      document.getElementById('m-cache').textContent = r.cacheSize || 0;
     }
   });
 }
