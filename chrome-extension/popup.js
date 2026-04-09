@@ -5,8 +5,8 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
-    // Auto-refresh logs when switching to logs tab
     if (tab.dataset.tab === 'logs') loadLogs();
+    if (tab.dataset.tab === 'status') { loadStatus(); checkBridge(false); }
   });
 });
 
@@ -131,7 +131,12 @@ document.getElementById('btn-save').addEventListener('click', () => {
     },
   };
   chrome.runtime.sendMessage({ type: 'SAVE_CONFIG', config }, () => {
-    setFeedback('bridge-feedback', 'ok', 'Configuration saved');
+    setFeedback('bridge-feedback', 'ok', 'Configuration saved — running sync...');
+    // Trigger a sync so status tab updates immediately
+    chrome.runtime.sendMessage({ type: 'FORCE_SYNC' }, () => {
+      loadStatus();
+      checkBridge(false);
+    });
   });
 });
 
