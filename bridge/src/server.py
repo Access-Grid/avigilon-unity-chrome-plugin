@@ -20,7 +20,7 @@ from .constants import BRIDGE_PORT
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app, origins=['chrome-extension://*'])
+CORS(app)
 
 
 @app.before_request
@@ -165,11 +165,13 @@ def avigilon_test():
 def avigilon_identities():
     try:
         client = _get_client()
+        logger.info("Fetching all identities from Avigilon...")
         identities = client.get_all_identities()
+        logger.info(f"Fetched {len(identities)} identities from Avigilon")
         return jsonify({'identities': identities, 'count': len(identities)})
     except Exception as e:
-        logger.error(f"Failed to fetch identities: {e}")
-        return jsonify({'error': str(e)}), 502
+        logger.error(f"Failed to fetch identities: {e}", exc_info=True)
+        return jsonify({'error': str(e), 'type': type(e).__name__}), 502
 
 
 @app.route('/api/avigilon/identities/xml', methods=['GET'])
@@ -280,6 +282,12 @@ def handle_auth_error(e):
     return jsonify({'error': 'Authentication failed', 'detail': str(e)}), 401
 
 
+@app.errorhandler(404)
+def handle_not_found(e):
+    logger.warning(f"404: {request.method} {request.url} — no matching route")
+    return jsonify({'error': f'Not found: {request.method} {request.path}'}), 404
+
+
 @app.errorhandler(ValueError)
 def handle_value_error(e):
     return jsonify({'error': str(e)}), 400
@@ -289,11 +297,11 @@ def handle_value_error(e):
 def handle_generic_error(e):
     import traceback
     tb = traceback.format_exc()
-    logger.error(f"Unhandled error: {e}\n{tb}")
+    logger.error(f"Unhandled error on {request.method} {request.path}: {type(e).__name__}: {e}\n{tb}")
     return jsonify({
         'error': str(e),
         'type': type(e).__name__,
-        'traceback': tb,
+        'detail': tb,
     }), 500
 
 
