@@ -1,8 +1,14 @@
 # Avigilon Unity Chrome Plugin
 
-Chrome extension + companion bridge app that synchronizes the Avigilon Unity (Avigilon) access control database with [AccessGrid](https://accessgrid.com) mobile credentials.
+Chrome extension + companion bridge app that synchronizes the Avigilon Unity access control database with [AccessGrid](https://accessgrid.com) mobile credentials.
 
 Designed to run on multiple machines simultaneously — the sync engine is fully stateless, comparing live data from both systems on every cycle rather than relying on local state.
+
+### Screenshots
+
+| Status | Settings | Logs |
+|--------|----------|------|
+| ![Status](docs/screenshot-status.png) | ![Settings](docs/screenshot-settings.png) | ![Logs](docs/screenshot-logs.png) |
 
 ## Architecture
 
