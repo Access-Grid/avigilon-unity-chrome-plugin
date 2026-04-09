@@ -141,10 +141,12 @@ async function bridgeFetch(path, options = {}) {
 
   log('HTTP', `← ${resp.status} ${path} (${elapsed}ms) ${truncated}`);
 
-  if (!resp.ok && resp.status !== 502) {
-    let errMsg;
-    try { errMsg = JSON.parse(respText).error; } catch { errMsg = null; }
-    throw new Error(errMsg || `Bridge HTTP ${resp.status}`);
+  if (!resp.ok) {
+    let parsed;
+    try { parsed = JSON.parse(respText); } catch { parsed = {}; }
+    const errMsg = parsed.error || parsed.detail || `Bridge HTTP ${resp.status}`;
+    const errType = parsed.type ? ` (${parsed.type})` : '';
+    throw new Error(`${errMsg}${errType}`);
   }
 
   try {

@@ -64,6 +64,12 @@ def load_config() -> dict:
     try:
         with open(CONFIG_FILE, "r") as f:
             raw = json.load(f)
+
+        # Migrate legacy "plasec" key → "avigilon"
+        if 'plasec' in raw and 'avigilon' not in raw:
+            raw['avigilon'] = raw.pop('plasec')
+            logger.info("Migrated config key 'plasec' → 'avigilon'")
+
         if 'avigilon' in raw and raw['avigilon'].get('password'):
             raw['avigilon']['password'] = decrypt_value(raw['avigilon']['password'])
         if 'accessgrid' in raw and raw['accessgrid'].get('api_secret'):

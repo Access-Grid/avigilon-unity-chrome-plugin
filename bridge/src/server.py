@@ -26,25 +26,31 @@ CORS(app, origins=['chrome-extension://*'])
 @app.before_request
 def _log_request():
     g.start_time = time.time()
-    body = ''
-    if request.content_length and request.content_length > 0:
-        body = request.get_data(as_text=True)
-        if len(body) > 300:
-            body = body[:300] + '...'
-        body = f' body={body}'
-    logger.info(f"→ {request.method} {request.path}{body}")
+    try:
+        body = ''
+        if request.content_length and request.content_length > 0:
+            body = request.get_data(as_text=True)
+            if len(body) > 300:
+                body = body[:300] + '...'
+            body = f' body={body}'
+        logger.info(f"→ {request.method} {request.path}{body}")
+    except Exception as e:
+        logger.warning(f"Failed to log request: {e}")
 
 
 @app.after_request
 def _log_response(response):
-    elapsed = (time.time() - g.get('start_time', time.time())) * 1000
-    body = ''
-    if response.content_type and 'json' in response.content_type:
-        resp_data = response.get_data(as_text=True)
-        if len(resp_data) > 300:
-            resp_data = resp_data[:300] + '...'
-        body = f' {resp_data}'
-    logger.info(f"← {response.status_code} {request.path} ({elapsed:.0f}ms){body}")
+    try:
+        elapsed = (time.time() - g.get('start_time', time.time())) * 1000
+        body = ''
+        if response.content_type and 'json' in response.content_type:
+            resp_data = response.get_data(as_text=True)
+            if len(resp_data) > 300:
+                resp_data = resp_data[:300] + '...'
+            body = f' {resp_data}'
+        logger.info(f"← {response.status_code} {request.path} ({elapsed:.0f}ms){body}")
+    except Exception as e:
+        logger.warning(f"Failed to log response: {e}")
     return response
 
 # Shared client instance — created on first use or config change
@@ -281,8 +287,14 @@ def handle_value_error(e):
 
 @app.errorhandler(Exception)
 def handle_generic_error(e):
-    logger.error(f"Unhandled error: {e}", exc_info=True)
-    return jsonify({'error': 'Internal server error', 'detail': str(e)}), 500
+    import traceback
+    tb = traceback.format_exc()
+    logger.error(f"Unhandled error: {e}\n{tb}")
+    return jsonify({
+        'error': str(e),
+        'type': type(e).__name__,
+        'traceback': tb,
+    }), 500
 
 
 def run_server(port: int = BRIDGE_PORT):
