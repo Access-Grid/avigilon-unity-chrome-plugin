@@ -40,14 +40,14 @@ class TestStatusEndpoint:
     @patch('src.server.load_config')
     def test_status_configured(self, mock_config, test_client):
         mock_config.return_value = {
-            'plasec': {'host': '10.0.0.1', 'username': 'admin', 'password': 'pass'},
+            'avigilon': {'host': '10.0.0.1', 'username': 'admin', 'password': 'pass'},
             'accessgrid': {'account_id': 'acc123'},
         }
         resp = test_client.get('/api/status')
         data = resp.get_json()
         assert data['configured'] is True
         assert data['accessgrid_configured'] is True
-        assert data['plasec_host'] == '10.0.0.1'
+        assert data['avigilon_host'] == '10.0.0.1'
 
 
 class TestConfigEndpoints:
@@ -55,14 +55,14 @@ class TestConfigEndpoints:
     @patch('src.server.load_config')
     def test_get_config_masks_secrets(self, mock_config, test_client):
         mock_config.return_value = {
-            'plasec': {'host': '10.0.0.1', 'username': 'admin', 'password': 'secret'},
+            'avigilon': {'host': '10.0.0.1', 'username': 'admin', 'password': 'secret'},
             'accessgrid': {'account_id': 'acc1', 'api_secret': 'supersecret', 'template_id': 't1'},
         }
         resp = test_client.get('/api/config')
         data = resp.get_json()
-        assert data['plasec']['host'] == '10.0.0.1'
-        assert data['plasec']['has_password'] is True
-        assert 'password' not in data['plasec']
+        assert data['avigilon']['host'] == '10.0.0.1'
+        assert data['avigilon']['has_password'] is True
+        assert 'password' not in data['avigilon']
         assert data['accessgrid']['has_secret'] is True
         assert 'api_secret' not in data['accessgrid']
 
@@ -71,7 +71,7 @@ class TestConfigEndpoints:
     @patch('src.server._reset_client')
     def test_set_config(self, mock_reset, mock_load, mock_save, test_client):
         resp = test_client.post('/api/config', json={
-            'plasec': {'host': '10.0.0.2', 'username': 'admin', 'password': 'pw'},
+            'avigilon': {'host': '10.0.0.2', 'username': 'admin', 'password': 'pw'},
             'accessgrid': {'account_id': 'a1', 'api_secret': 's1', 'template_id': 't1'},
         })
         assert resp.status_code == 200
@@ -80,7 +80,7 @@ class TestConfigEndpoints:
         mock_reset.assert_called_once()
 
 
-class TestPlasecProxyEndpoints:
+class TestAvigilonProxyEndpoints:
 
     @patch('src.server._get_client')
     def test_test_connection_success(self, mock_get, test_client):
@@ -88,7 +88,7 @@ class TestPlasecProxyEndpoints:
         mock_client.test_connection.return_value = True
         mock_get.return_value = mock_client
 
-        resp = test_client.post('/api/plasec/test')
+        resp = test_client.post('/api/avigilon/test')
         assert resp.status_code == 200
         assert resp.get_json()['connected'] is True
 
@@ -98,7 +98,7 @@ class TestPlasecProxyEndpoints:
         mock_client.test_connection.return_value = False
         mock_get.return_value = mock_client
 
-        resp = test_client.post('/api/plasec/test')
+        resp = test_client.post('/api/avigilon/test')
         assert resp.get_json()['connected'] is False
 
     @patch('src.server._get_client')
@@ -110,7 +110,7 @@ class TestPlasecProxyEndpoints:
         ]
         mock_get.return_value = mock_client
 
-        resp = test_client.get('/api/plasec/identities')
+        resp = test_client.get('/api/avigilon/identities')
         data = resp.get_json()
         assert data['count'] == 2
         assert data['identities'][0]['full_name'] == 'John Doe'
@@ -123,7 +123,7 @@ class TestPlasecProxyEndpoints:
         }
         mock_get.return_value = mock_client
 
-        resp = test_client.get('/api/plasec/identities/abc')
+        resp = test_client.get('/api/avigilon/identities/abc')
         data = resp.get_json()
         assert data['id'] == 'abc'
         assert data['email'] == 'john@example.com'
@@ -134,7 +134,7 @@ class TestPlasecProxyEndpoints:
         mock_client.get_identity.return_value = None
         mock_get.return_value = mock_client
 
-        resp = test_client.get('/api/plasec/identities/missing')
+        resp = test_client.get('/api/avigilon/identities/missing')
         assert resp.status_code == 404
 
     @patch('src.server._get_client')
@@ -145,7 +145,7 @@ class TestPlasecProxyEndpoints:
         ]
         mock_get.return_value = mock_client
 
-        resp = test_client.get('/api/plasec/identities/abc/tokens')
+        resp = test_client.get('/api/avigilon/identities/abc/tokens')
         data = resp.get_json()
         assert data['count'] == 1
         assert data['tokens'][0]['embossed_number'] == 'AccessGrid'
@@ -157,7 +157,7 @@ class TestPlasecProxyEndpoints:
         mock_get.return_value = mock_client
 
         resp = test_client.put(
-            '/api/plasec/identities/abc/tokens/tok1/status',
+            '/api/avigilon/identities/abc/tokens/tok1/status',
             json={'status': '2'},
         )
         assert resp.get_json()['updated'] is True
@@ -170,12 +170,12 @@ class TestPlasecProxyEndpoints:
         ]
         mock_get.return_value = mock_client
 
-        resp = test_client.get('/api/plasec/card_formats')
+        resp = test_client.get('/api/avigilon/card_formats')
         data = resp.get_json()
         assert len(data['card_formats']) == 1
 
-    @patch('src.server._get_client', side_effect=ValueError("Plasec not configured"))
+    @patch('src.server._get_client', side_effect=ValueError("Avigilon not configured"))
     def test_unconfigured_returns_error(self, mock_get, test_client):
-        resp = test_client.get('/api/plasec/identities')
+        resp = test_client.get('/api/avigilon/identities')
         assert resp.status_code == 502
         assert 'not configured' in resp.get_json()['error'].lower()

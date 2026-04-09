@@ -64,8 +64,8 @@ def load_config() -> dict:
     try:
         with open(CONFIG_FILE, "r") as f:
             raw = json.load(f)
-        if 'plasec' in raw and raw['plasec'].get('password'):
-            raw['plasec']['password'] = decrypt_value(raw['plasec']['password'])
+        if 'avigilon' in raw and raw['avigilon'].get('password'):
+            raw['avigilon']['password'] = decrypt_value(raw['avigilon']['password'])
         if 'accessgrid' in raw and raw['accessgrid'].get('api_secret'):
             raw['accessgrid']['api_secret'] = decrypt_value(raw['accessgrid']['api_secret'])
         return raw
@@ -78,8 +78,8 @@ def save_config(config: dict):
     """Save config to disk, encrypting sensitive fields."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
     to_save = json.loads(json.dumps(config))
-    if 'plasec' in to_save and to_save['plasec'].get('password'):
-        to_save['plasec']['password'] = encrypt_value(to_save['plasec']['password'])
+    if 'avigilon' in to_save and to_save['avigilon'].get('password'):
+        to_save['avigilon']['password'] = encrypt_value(to_save['avigilon']['password'])
     if 'accessgrid' in to_save and to_save['accessgrid'].get('api_secret'):
         to_save['accessgrid']['api_secret'] = encrypt_value(to_save['accessgrid']['api_secret'])
     with open(CONFIG_FILE, "w") as f:

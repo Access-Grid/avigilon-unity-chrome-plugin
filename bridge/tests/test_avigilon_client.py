@@ -1,12 +1,12 @@
 """
-Tests for PlaSecClient — normalization, XML parsing, and API interaction.
+Tests for AvigilonClient — normalization, XML parsing, and API interaction.
 """
 
 import json
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
-from src.plasec_client import PlaSecClient
+from src.avigilon_client import AvigilonClient
 
 
 # ------------------------------------------------------------------
@@ -16,8 +16,8 @@ from src.plasec_client import PlaSecClient
 @pytest.fixture
 def client():
     """Create a client without hitting any network."""
-    with patch.object(PlaSecClient, 'login', return_value=True):
-        c = PlaSecClient('10.100.9.39', 'admin', 'password')
+    with patch.object(AvigilonClient, 'login', return_value=True):
+        c = AvigilonClient('10.100.9.39', 'admin', 'password')
         c._logged_in = True
         return c
 
@@ -33,14 +33,14 @@ class TestNormalizeIdentity:
             'id': '414c536238ab4c6c',
             'type': 'Identity',
             'attributes': {
-                'plasecFname': 'John',
-                'plasecLname': 'Doe',
-                'plasecName': 'Doe, John',
-                'plasecIdstatus': 1,
-                'plasecidentityEmailaddress': 'john@example.com',
-                'plasecidentityPhone': '555-1234',
-                'plasecidentityTitle': 'Manager',
-                'plasecidentityDepartment': 'HR',
+                'avigilonFname': 'John',
+                'avigilonLname': 'Doe',
+                'avigilonName': 'Doe, John',
+                'avigilonIdstatus': 1,
+                'avigilonidentityEmailaddress': 'john@example.com',
+                'avigilonidentityPhone': '555-1234',
+                'avigilonidentityTitle': 'Manager',
+                'avigilonidentityDepartment': 'HR',
             },
         }
         result = client._normalize_identity(raw)
@@ -56,9 +56,9 @@ class TestNormalizeIdentity:
     def test_legacy_flat_shape(self, client):
         raw = {
             'cn': 'abc123',
-            'plasecFname': 'Jane',
-            'plasecLname': 'Smith',
-            'plasecIdstatus': '2',
+            'avigilonFname': 'Jane',
+            'avigilonLname': 'Smith',
+            'avigilonIdstatus': '2',
         }
         result = client._normalize_identity(raw)
         assert result['id'] == 'abc123'
@@ -66,11 +66,11 @@ class TestNormalizeIdentity:
         assert result['last_name'] == 'Smith'
         assert result['status'] == '2'
 
-    def test_name_from_plasec_name(self, client):
+    def test_name_from_avigilon_name(self, client):
         raw = {
             'cn': 'xyz',
-            'plasecName': 'BRESCIA MOREYRA, FORTUNATO',
-            'plasecIdstatus': '1',
+            'avigilonName': 'BRESCIA MOREYRA, FORTUNATO',
+            'avigilonIdstatus': '1',
         }
         result = client._normalize_identity(raw)
         assert result['first_name'] == 'FORTUNATO'
@@ -98,8 +98,8 @@ class TestNormalizeToken:
             'type': 'Token',
             'attributes': {
                 'cn': '7480262f02d94970',
-                'plasecInternalnumber': '42069',
-                'plasecEmbossednumber': 'AccessGrid',
+                'avigilonInternalnumber': '42069',
+                'avigilonEmbossednumber': 'AccessGrid',
                 'extended_attributes': {
                     'token_status': 'Active',
                     'formatted_issue_date': '2026-02-27',
@@ -119,9 +119,9 @@ class TestNormalizeToken:
         raw = {
             'id': 'tok1',
             'attributes': {
-                'plasecTokenstatus': 2,
-                'plasecInternalnumber': '100',
-                'plasecEmbossednumber': '200',
+                'avigilonTokenstatus': 2,
+                'avigilonInternalnumber': '100',
+                'avigilonEmbossednumber': '200',
             },
         }
         result = client._normalize_token(raw, 'id1')
@@ -131,9 +131,9 @@ class TestNormalizeToken:
     def test_legacy_flat_token(self, client):
         raw = {
             'cn': 'tok2',
-            'plasecInternalnumber': '300',
-            'plasecEmbossednumber': 'AccessGrid',
-            'plasecTokenstatus': '1',
+            'avigilonInternalnumber': '300',
+            'avigilonEmbossednumber': 'AccessGrid',
+            'avigilonTokenstatus': '1',
         }
         result = client._normalize_token(raw)
         assert result['id'] == 'tok2'
@@ -151,15 +151,15 @@ class TestXMLParsing:
         xml = """<identities type="array">
             <identity>
                 <cns type="array"><cn>abc123</cn></cns>
-                <plasecFname>JOHN</plasecFname>
-                <plasecLname>DOE</plasecLname>
-                <plasecIdstatus>1</plasecIdstatus>
-                <plasecName>DOE, JOHN</plasecName>
+                <avigilonFname>JOHN</avigilonFname>
+                <avigilonLname>DOE</avigilonLname>
+                <avigilonIdstatus>1</avigilonIdstatus>
+                <avigilonName>DOE, JOHN</avigilonName>
             </identity>
             <identity>
                 <cns type="array"><cn>def456</cn></cns>
-                <plasecName>SMITH, JANE</plasecName>
-                <plasecIdstatus>2</plasecIdstatus>
+                <avigilonName>SMITH, JANE</avigilonName>
+                <avigilonIdstatus>2</avigilonIdstatus>
             </identity>
         </identities>"""
 
@@ -180,11 +180,11 @@ class TestXMLParsing:
         xml = """<tokens type="array">
             <token>
                 <cns type="array"><cn>tok1</cn></cns>
-                <plasecInternalnumber>54321</plasecInternalnumber>
-                <plasecEmbossednumber>AccessGrid</plasecEmbossednumber>
-                <plasecTokenstatus>1</plasecTokenstatus>
-                <plasecActivatedate>20260227212244Z</plasecActivatedate>
-                <plasecDeactivatedate>20270327211824Z</plasecDeactivatedate>
+                <avigilonInternalnumber>54321</avigilonInternalnumber>
+                <avigilonEmbossednumber>AccessGrid</avigilonEmbossednumber>
+                <avigilonTokenstatus>1</avigilonTokenstatus>
+                <avigilonActivatedate>20260227212244Z</avigilonActivatedate>
+                <avigilonDeactivatedate>20270327211824Z</avigilonDeactivatedate>
             </token>
         </tokens>"""
 
@@ -211,12 +211,12 @@ class TestCardFormat:
         raw = {
             'id': 'fmt1',
             'attributes': {
-                'plasecName': '26-bit Wiegand',
-                'plaseccfmtFacilitycode': '100',
-                'plaseccfmtMaxdigits': '26',
-                'plaseccfmtFcodelen': '8',
-                'plaseccfmtCardlen': '16',
-                'plaseccfmtType': 'wiegand',
+                'avigilonName': '26-bit Wiegand',
+                'avigiloncfmtFacilitycode': '100',
+                'avigiloncfmtMaxdigits': '26',
+                'avigiloncfmtFcodelen': '8',
+                'avigiloncfmtCardlen': '16',
+                'avigiloncfmtType': 'wiegand',
             },
         }
         result = client._normalize_card_format(raw)
@@ -227,8 +227,8 @@ class TestCardFormat:
     def test_flat_shape(self, client):
         raw = {
             'cn': 'fmt2',
-            'plasecName': 'Custom',
-            'plaseccfmtFacilitycode': '200',
+            'avigilonName': 'Custom',
+            'avigiloncfmtFacilitycode': '200',
         }
         result = client._normalize_card_format(raw)
         assert result['id'] == 'fmt2'

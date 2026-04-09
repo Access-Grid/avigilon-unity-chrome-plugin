@@ -3,7 +3,7 @@ Avigilon Unity Chrome Plugin Bridge — main entry point.
 
 Starts the localhost HTTP server and system tray icon.
 The server proxies requests from the Chrome extension to the
-Plasec/Avigilon server, handling SSL bypass and XML parsing.
+Avigilon server, handling SSL bypass and XML parsing.
 
 Usage:
   python main.py                 # Launch with tray icon + settings window
@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 class SettingsWindow:
     """Tk settings window for configuring the bridge.
 
-    Only Plasec credentials are configured here — AccessGrid credentials
+    Only Avigilon credentials are configured here — AccessGrid credentials
     are configured in the Chrome extension popup (the extension calls
     the AG API directly, the bridge never talks to AccessGrid).
     """
@@ -95,28 +95,28 @@ class SettingsWindow:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # --- Plasec section ---
-        ttk.Label(main_frame, text="Plasec / Avigilon Unity", font=('', 13, 'bold')).pack(anchor=tk.W)
+        # --- Avigilon section ---
+        ttk.Label(main_frame, text="Avigilon Unity", font=('', 13, 'bold')).pack(anchor=tk.W)
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(2, 10))
 
-        plasec = config.get('plasec', {})
+        avigilon = config.get('avigilon', {})
 
         ttk.Label(main_frame, text="Host / IP:").pack(anchor=tk.W)
-        self.plasec_host = ttk.Entry(main_frame, width=50)
-        self.plasec_host.insert(0, plasec.get('host', ''))
-        self.plasec_host.pack(fill=tk.X, pady=(0, 8))
+        self.avigilon_host = ttk.Entry(main_frame, width=50)
+        self.avigilon_host.insert(0, avigilon.get('host', ''))
+        self.avigilon_host.pack(fill=tk.X, pady=(0, 8))
 
         ttk.Label(main_frame, text="Username:").pack(anchor=tk.W)
-        self.plasec_user = ttk.Entry(main_frame, width=50)
-        self.plasec_user.insert(0, plasec.get('username', ''))
-        self.plasec_user.pack(fill=tk.X, pady=(0, 8))
+        self.avigilon_user = ttk.Entry(main_frame, width=50)
+        self.avigilon_user.insert(0, avigilon.get('username', ''))
+        self.avigilon_user.pack(fill=tk.X, pady=(0, 8))
 
         ttk.Label(main_frame, text="Password:").pack(anchor=tk.W)
-        self.plasec_pass = ttk.Entry(main_frame, width=50, show='*')
-        self.plasec_pass.insert(0, plasec.get('password', ''))
-        self.plasec_pass.pack(fill=tk.X, pady=(0, 8))
+        self.avigilon_pass = ttk.Entry(main_frame, width=50, show='*')
+        self.avigilon_pass.insert(0, avigilon.get('password', ''))
+        self.avigilon_pass.pack(fill=tk.X, pady=(0, 8))
 
-        ttk.Button(main_frame, text="Test Plasec Connection", command=self._test_plasec).pack(anchor=tk.W, pady=(0, 16))
+        ttk.Button(main_frame, text="Test Avigilon Connection", command=self._test_avigilon).pack(anchor=tk.W, pady=(0, 16))
 
         # --- Info ---
         ttk.Label(
@@ -179,10 +179,10 @@ class SettingsWindow:
 
     def _save(self):
         config = load_config()
-        config['plasec'] = {
-            'host': self.plasec_host.get().strip(),
-            'username': self.plasec_user.get().strip(),
-            'password': self.plasec_pass.get(),
+        config['avigilon'] = {
+            'host': self.avigilon_host.get().strip(),
+            'username': self.avigilon_user.get().strip(),
+            'password': self.avigilon_pass.get(),
         }
         save_config(config)
 
@@ -197,19 +197,19 @@ class SettingsWindow:
 
         messagebox.showinfo("Saved", "Configuration saved successfully.")
 
-    def _test_plasec(self):
-        from src.plasec_client import PlaSecClient
-        host = self.plasec_host.get().strip()
-        user = self.plasec_user.get().strip()
-        pwd = self.plasec_pass.get()
+    def _test_avigilon(self):
+        from src.avigilon_client import AvigilonClient
+        host = self.avigilon_host.get().strip()
+        user = self.avigilon_user.get().strip()
+        pwd = self.avigilon_pass.get()
         if not host or not user or not pwd:
             messagebox.showwarning("Missing", "Fill in host, username, and password first.")
             return
         try:
-            client = PlaSecClient(host, user, pwd)
+            client = AvigilonClient(host, user, pwd)
             ok = client.test_connection()
             if ok:
-                messagebox.showinfo("Success", "Connected to Plasec successfully!")
+                messagebox.showinfo("Success", "Connected to Avigilon successfully!")
             else:
                 messagebox.showerror("Failed", "Could not connect. Check credentials and host.")
         except Exception as e:

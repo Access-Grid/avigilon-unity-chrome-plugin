@@ -1,6 +1,6 @@
 # Avigilon Unity Chrome Plugin
 
-Chrome extension + companion bridge app that synchronizes the Avigilon Unity (Plasec) access control database with [AccessGrid](https://accessgrid.com) mobile credentials.
+Chrome extension + companion bridge app that synchronizes the Avigilon Unity (Avigilon) access control database with [AccessGrid](https://accessgrid.com) mobile credentials.
 
 Designed to run on multiple machines simultaneously — the sync engine is fully stateless, comparing live data from both systems on every cycle rather than relying on local state.
 
@@ -13,10 +13,10 @@ Chrome Extension (MV3 service worker)
 Python/Tk Bridge App (localhost HTTP server)
     ↕  requests (SSL verify=False for self-signed certs)
     ↕  XML parsing → JSON normalization
-Avigilon / Plasec Server
+Avigilon / Avigilon Server
 ```
 
-**Why two components?** The Plasec server uses self-signed SSL certificates and returns XML responses. Chrome's `fetch()` cannot bypass SSL verification, so the bridge app handles SSL and XML, exposing a clean JSON API on localhost that the extension consumes.
+**Why two components?** The Avigilon server uses self-signed SSL certificates and returns XML responses. Chrome's `fetch()` cannot bypass SSL verification, so the bridge app handles SSL and XML, exposing a clean JSON API on localhost that the extension consumes.
 
 ## Sync Phases
 
@@ -24,12 +24,12 @@ On every cycle (triggered by page navigation or 1-minute timer), the extension r
 
 | Phase | Direction | Action |
 |-------|-----------|--------|
-| 1 | Plasec → AccessGrid | Provision new mobile credentials for tokens marked "AccessGrid" |
-| 2 | Plasec → AccessGrid | Push token status changes (active/inactive/expired) |
-| 3 | Plasec → AccessGrid | Terminate AG cards when identities or tokens are deleted |
-| 4 | AccessGrid → Plasec | Sync AG card state changes back to Plasec token statuses |
+| 1 | Avigilon → AccessGrid | Provision new mobile credentials for tokens marked "AccessGrid" |
+| 2 | Avigilon → AccessGrid | Push token status changes (active/inactive/expired) |
+| 3 | Avigilon → AccessGrid | Terminate AG cards when identities or tokens are deleted |
+| 4 | AccessGrid → Avigilon | Sync AG card state changes back to Avigilon token statuses |
 | 5 | — | Retries (implicit — stateless design retries on next cycle) |
-| 6 | Plasec → AccessGrid | Push contact field changes (name, title) |
+| 6 | Avigilon → AccessGrid | Push contact field changes (name, title) |
 
 ## Setup
 
@@ -51,8 +51,8 @@ python -m venv .venv
 ```
 
 On launch, configure:
-- **Plasec Host/IP** — the Avigilon Unity server address
-- **Username / Password** — Plasec admin credentials
+- **Avigilon Host/IP** — the Avigilon Unity server address
+- **Username / Password** — Avigilon admin credentials
 - Check **"Start bridge on login"** to run automatically on boot
 
 The bridge runs on `localhost:19780`.
@@ -78,7 +78,7 @@ Click **Run Sync Now** in the extension popup. The status panel shows identity c
 
 ## Fake Avigilon Server
 
-For local development and testing, a mock Plasec server is included:
+For local development and testing, a mock Avigilon server is included:
 
 ```bash
 cd fake-avigilon-server
@@ -114,7 +114,7 @@ chrome-extension/                 Chrome MV3 extension
 bridge/                           Python/Tk companion app
 ├── main.py                       Entry point, Tk settings window, tray icon
 ├── src/
-│   ├── plasec_client.py          Plasec HTTP client (SSL bypass, XML parsing)
+│   ├── avigilon_client.py          Avigilon HTTP client (SSL bypass, XML parsing)
 │   ├── server.py                 Flask localhost API (JSON proxy)
 │   ├── config.py                 Fernet-encrypted config storage
 │   ├── tray.py                   System tray icon (pystray)
@@ -124,7 +124,7 @@ bridge/                           Python/Tk companion app
 ├── AvigilonBridge.spec           PyInstaller build spec
 └── requirements.txt
 
-fake-avigilon-server/             Mock Plasec server for testing
+fake-avigilon-server/             Mock Avigilon server for testing
 └── server.py
 
 .github/workflows/build.yml      CI: bridge binaries (3 OS) + extension zip

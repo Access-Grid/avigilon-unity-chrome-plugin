@@ -1,0 +1,1 @@
+- [No gh CLI](feedback_no_gh.md) — Never use the gh CLI tool, user does not want it

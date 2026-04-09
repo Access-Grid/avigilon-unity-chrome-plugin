@@ -1,6 +1,6 @@
 """
 Localhost HTTP server that proxies requests from the Chrome extension
-to the Plasec/Avigilon server. Handles SSL bypass and XML parsing.
+to the Avigilon server. Handles SSL bypass and XML parsing.
 
 All endpoints return JSON. The Chrome extension never sees XML or
 deals with self-signed certificates.
@@ -13,7 +13,7 @@ from typing import Optional
 from flask import Flask, g, jsonify, request
 from flask_cors import CORS
 
-from .plasec_client import PlaSecClient, PlaSecAuthError
+from .avigilon_client import AvigilonClient, AvigilonAuthError
 from .config import load_config, save_config
 from .constants import BRIDGE_PORT
 
@@ -48,25 +48,25 @@ def _log_response(response):
     return response
 
 # Shared client instance — created on first use or config change
-_client: Optional[PlaSecClient] = None
+_client: Optional[AvigilonClient] = None
 
 
-def _get_client() -> PlaSecClient:
-    """Get or create the Plasec client from saved config."""
+def _get_client() -> AvigilonClient:
+    """Get or create the Avigilon client from saved config."""
     global _client
     if _client is not None:
         return _client
 
     config = load_config()
-    plasec = config.get('plasec', {})
-    host = plasec.get('host', '')
-    username = plasec.get('username', '')
-    password = plasec.get('password', '')
+    avigilon = config.get('avigilon', {})
+    host = avigilon.get('host', '')
+    username = avigilon.get('username', '')
+    password = avigilon.get('password', '')
 
     if not host or not username:
-        raise ValueError("Plasec not configured — set host/username/password via /api/config")
+        raise ValueError("Avigilon not configured — set host/username/password via /api/config")
 
-    _client = PlaSecClient(host, username, password)
+    _client = AvigilonClient(host, username, password)
     return _client
 
 
@@ -88,12 +88,12 @@ def health():
 @app.route('/api/status', methods=['GET'])
 def status():
     config = load_config()
-    has_plasec = bool(config.get('plasec', {}).get('host'))
+    has_avigilon = bool(config.get('avigilon', {}).get('host'))
     has_ag = bool(config.get('accessgrid', {}).get('account_id'))
     return jsonify({
-        'configured': has_plasec,
+        'configured': has_avigilon,
         'accessgrid_configured': has_ag,
-        'plasec_host': config.get('plasec', {}).get('host', ''),
+        'avigilon_host': config.get('avigilon', {}).get('host', ''),
     })
 
 
@@ -105,10 +105,10 @@ def status():
 def get_config():
     config = load_config()
     safe = {
-        'plasec': {
-            'host': config.get('plasec', {}).get('host', ''),
-            'username': config.get('plasec', {}).get('username', ''),
-            'has_password': bool(config.get('plasec', {}).get('password')),
+        'avigilon': {
+            'host': config.get('avigilon', {}).get('host', ''),
+            'username': config.get('avigilon', {}).get('username', ''),
+            'has_password': bool(config.get('avigilon', {}).get('password')),
         },
         'accessgrid': {
             'account_id': config.get('accessgrid', {}).get('account_id', ''),
@@ -124,11 +124,11 @@ def set_config():
     data = request.get_json(force=True)
     config = load_config()
 
-    if 'plasec' in data:
-        config.setdefault('plasec', {})
+    if 'avigilon' in data:
+        config.setdefault('avigilon', {})
         for key in ('host', 'username', 'password'):
-            if key in data['plasec']:
-                config['plasec'][key] = data['plasec'][key]
+            if key in data['avigilon']:
+                config['avigilon'][key] = data['avigilon'][key]
 
     if 'accessgrid' in data:
         config.setdefault('accessgrid', {})
@@ -142,11 +142,11 @@ def set_config():
 
 
 # ------------------------------------------------------------------
-# Plasec proxy endpoints
+# Avigilon proxy endpoints
 # ------------------------------------------------------------------
 
-@app.route('/api/plasec/test', methods=['POST'])
-def plasec_test():
+@app.route('/api/avigilon/test', methods=['POST'])
+def avigilon_test():
     try:
         client = _get_client()
         ok = client.test_connection()
@@ -155,8 +155,8 @@ def plasec_test():
         return jsonify({'connected': False, 'error': str(e)}), 200
 
 
-@app.route('/api/plasec/identities', methods=['GET'])
-def plasec_identities():
+@app.route('/api/avigilon/identities', methods=['GET'])
+def avigilon_identities():
     try:
         client = _get_client()
         identities = client.get_all_identities()
@@ -166,8 +166,8 @@ def plasec_identities():
         return jsonify({'error': str(e)}), 502
 
 
-@app.route('/api/plasec/identities/xml', methods=['GET'])
-def plasec_identities_xml():
+@app.route('/api/avigilon/identities/xml', methods=['GET'])
+def avigilon_identities_xml():
     """Fetch identities via XML endpoint (used as fallback)."""
     try:
         client = _get_client()
@@ -178,8 +178,8 @@ def plasec_identities_xml():
         return jsonify({'error': str(e)}), 502
 
 
-@app.route('/api/plasec/identities/<identity_id>', methods=['GET'])
-def plasec_identity(identity_id):
+@app.route('/api/avigilon/identities/<identity_id>', methods=['GET'])
+def avigilon_identity(identity_id):
     try:
         client = _get_client()
         identity = client.get_identity(identity_id)
@@ -190,8 +190,8 @@ def plasec_identity(identity_id):
         return jsonify({'error': str(e)}), 502
 
 
-@app.route('/api/plasec/identities/<identity_id>/tokens', methods=['GET'])
-def plasec_tokens(identity_id):
+@app.route('/api/avigilon/identities/<identity_id>/tokens', methods=['GET'])
+def avigilon_tokens(identity_id):
     try:
         client = _get_client()
         use_xml = request.args.get('format') == 'xml'
@@ -204,8 +204,8 @@ def plasec_tokens(identity_id):
         return jsonify({'error': str(e)}), 502
 
 
-@app.route('/api/plasec/identities', methods=['POST'])
-def plasec_create_identity():
+@app.route('/api/avigilon/identities', methods=['POST'])
+def avigilon_create_identity():
     try:
         client = _get_client()
         data = request.get_json(force=True)
@@ -217,8 +217,8 @@ def plasec_create_identity():
         return jsonify({'error': str(e)}), 502
 
 
-@app.route('/api/plasec/identities/<identity_id>/tokens', methods=['POST'])
-def plasec_create_token(identity_id):
+@app.route('/api/avigilon/identities/<identity_id>/tokens', methods=['POST'])
+def avigilon_create_token(identity_id):
     try:
         client = _get_client()
         data = request.get_json(force=True)
@@ -230,8 +230,8 @@ def plasec_create_token(identity_id):
         return jsonify({'error': str(e)}), 502
 
 
-@app.route('/api/plasec/identities/<identity_id>/tokens/<token_id>/status', methods=['PUT'])
-def plasec_update_token_status(identity_id, token_id):
+@app.route('/api/avigilon/identities/<identity_id>/tokens/<token_id>/status', methods=['PUT'])
+def avigilon_update_token_status(identity_id, token_id):
     try:
         client = _get_client()
         data = request.get_json(force=True)
@@ -245,8 +245,8 @@ def plasec_update_token_status(identity_id, token_id):
         return jsonify({'error': str(e)}), 502
 
 
-@app.route('/api/plasec/identities/<identity_id>/tokens/<token_id>', methods=['DELETE'])
-def plasec_delete_token(identity_id, token_id):
+@app.route('/api/avigilon/identities/<identity_id>/tokens/<token_id>', methods=['DELETE'])
+def avigilon_delete_token(identity_id, token_id):
     try:
         client = _get_client()
         ok = client.delete_token(identity_id, token_id)
@@ -255,8 +255,8 @@ def plasec_delete_token(identity_id, token_id):
         return jsonify({'error': str(e)}), 502
 
 
-@app.route('/api/plasec/card_formats', methods=['GET'])
-def plasec_card_formats():
+@app.route('/api/avigilon/card_formats', methods=['GET'])
+def avigilon_card_formats():
     try:
         client = _get_client()
         formats = client.get_card_formats()
@@ -269,7 +269,7 @@ def plasec_card_formats():
 # Error handlers
 # ------------------------------------------------------------------
 
-@app.errorhandler(PlaSecAuthError)
+@app.errorhandler(AvigilonAuthError)
 def handle_auth_error(e):
     return jsonify({'error': 'Authentication failed', 'detail': str(e)}), 401
 

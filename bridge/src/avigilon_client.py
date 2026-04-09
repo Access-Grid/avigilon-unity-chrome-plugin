@@ -1,5 +1,5 @@
 """
-HTTP API client for Plasec / Avigilon Unity access control system.
+HTTP API client for Avigilon Unity access control system.
 
 Ported from avigilon-unity-service with identical API surface.
 Handles both JSON and XML responses, session management, CSRF tokens,
@@ -17,24 +17,24 @@ import urllib3
 from .constants import (
     HTTP_TIMEOUT,
     HTTP_USER_AGENT,
-    PLASEC_TOKEN_STATUS_ACTIVE,
-    PLASEC_TOKEN_TYPE_STANDARD,
+    AVIGILON_TOKEN_STATUS_ACTIVE,
+    AVIGILON_TOKEN_TYPE_STANDARD,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class PlaSecAuthError(Exception):
+class AvigilonAuthError(Exception):
     pass
 
 
-class PlaSecAPIError(Exception):
+class AvigilonAPIError(Exception):
     pass
 
 
-class PlaSecClient:
+class AvigilonClient:
     """
-    Session-based HTTP client for Plasec / Avigilon Unity.
+    Session-based HTTP client for Avigilon Unity.
     SSL verification is disabled by default for self-signed certs.
     """
 
@@ -66,20 +66,20 @@ class PlaSecClient:
             )
             if self.session.cookies.get('_session_id'):
                 self._logged_in = True
-                logger.info("Logged in to Plasec")
+                logger.info("Logged in to Avigilon")
                 return True
             if resp.status_code == 404:
-                logger.error(f"Plasec login: 404 — verify {self.base_url} is correct")
+                logger.error(f"Avigilon login: 404 — verify {self.base_url} is correct")
             else:
-                logger.error(f"Plasec login: no session cookie (status {resp.status_code})")
+                logger.error(f"Avigilon login: no session cookie (status {resp.status_code})")
         except requests.RequestException as e:
-            logger.error(f"Plasec login failed: {e}")
+            logger.error(f"Avigilon login failed: {e}")
         return False
 
     def _ensure_authenticated(self):
         if not self._logged_in:
             if not self.login():
-                raise PlaSecAuthError("Cannot authenticate with Plasec server")
+                raise AvigilonAuthError("Cannot authenticate with Avigilon server")
 
     def _request(self, method: str, path: str, **kwargs) -> requests.Response:
         self._ensure_authenticated()
@@ -98,7 +98,7 @@ class PlaSecClient:
         )
 
         if self._is_session_expired(resp, path):
-            logger.warning("Plasec session expired — re-authenticating")
+            logger.warning("Avigilon session expired — re-authenticating")
             self._logged_in = False
             if self.login():
                 headers['X-CSRF-Token'] = self.csrf_token
@@ -131,7 +131,7 @@ class PlaSecClient:
         while True:
             resp = self._request(
                 'GET', '/identities.json',
-                params={'page': page, 'perpage': per_page, 'sort_by': 'plasecName', 'order': 'ascend'},
+                params={'page': page, 'perpage': per_page, 'sort_by': 'avigilonName', 'order': 'ascend'},
                 headers={'Accept': 'application/json'},
             )
             if resp.status_code != 200:
@@ -235,16 +235,16 @@ class PlaSecClient:
         form = {
             'utf8': '\u2713',
             'authenticity_token': self.csrf_token,
-            'identity[plasecLname]': data.get('last_name', ''),
-            'identity[plasecFname]': data.get('first_name', ''),
-            'identity[plasecidentityEmailaddress]': data.get('email', ''),
-            'identity[plasecidentityPhone]': data.get('phone', ''),
-            'identity[plasecidentityWorkphone]': data.get('work_phone', ''),
-            'identity[plasecidentityTitle]': data.get('title', ''),
-            'identity[plasecidentityDepartment]': data.get('department', ''),
-            'identity[plasecIdstatus]': '1',
-            'identity[plasecidentityPagetimeout]': '600000',
-            'identity[plasecidentityForcedPasswordChange]': 'TRUE',
+            'identity[avigilonLname]': data.get('last_name', ''),
+            'identity[avigilonFname]': data.get('first_name', ''),
+            'identity[avigilonidentityEmailaddress]': data.get('email', ''),
+            'identity[avigilonidentityPhone]': data.get('phone', ''),
+            'identity[avigilonidentityWorkphone]': data.get('work_phone', ''),
+            'identity[avigilonidentityTitle]': data.get('title', ''),
+            'identity[avigilonidentityDepartment]': data.get('department', ''),
+            'identity[avigilonIdstatus]': '1',
+            'identity[avigilonidentityPagetimeout]': '600000',
+            'identity[avigilonidentityForcedPasswordChange]': 'TRUE',
         }
         resp = self._request('POST', '/identities', data=form, allow_redirects=False)
         location = resp.headers.get('Location', '')
@@ -259,20 +259,20 @@ class PlaSecClient:
         form = {
             'utf8': '\u2713',
             'authenticity_token': self.csrf_token,
-            'token[plasecInternalnumber]': token_data.get('internal_number', ''),
-            'token[plasecEmbossednumber]': token_data.get('embossed_number', ''),
-            'token[plasecPIN]': token_data.get('pin', ''),
-            'token[plasecTokenType]': token_data.get('token_type', PLASEC_TOKEN_TYPE_STANDARD),
-            'token[plasecTokenlevel]': token_data.get('level', '0'),
-            'token[plasecTokenstatus]': token_data.get('status', PLASEC_TOKEN_STATUS_ACTIVE),
-            'token[plasecDownload]': 'TRUE',
-            'token[plasecTokenMobileAppType]': '0',
-            'token[plasecTokenOrigoMobileIdType]': '0',
-            'token[plasecTokenUnitofUpdatePeriod]': '0',
-            'token[plasecTokennoexpire]': 'FALSE',
-            'plasecIssuedate': token_data.get('issue_date', ''),
-            'plasecActivatedate': token_data.get('activate_date', ''),
-            'plasecDeactivatedate': token_data.get('deactivate_date', ''),
+            'token[avigilonInternalnumber]': token_data.get('internal_number', ''),
+            'token[avigilonEmbossednumber]': token_data.get('embossed_number', ''),
+            'token[avigilonPIN]': token_data.get('pin', ''),
+            'token[avigilonTokenType]': token_data.get('token_type', AVIGILON_TOKEN_TYPE_STANDARD),
+            'token[avigilonTokenlevel]': token_data.get('level', '0'),
+            'token[avigilonTokenstatus]': token_data.get('status', AVIGILON_TOKEN_STATUS_ACTIVE),
+            'token[avigilonDownload]': 'TRUE',
+            'token[avigilonTokenMobileAppType]': '0',
+            'token[avigilonTokenOrigoMobileIdType]': '0',
+            'token[avigilonTokenUnitofUpdatePeriod]': '0',
+            'token[avigilonTokennoexpire]': 'FALSE',
+            'avigilonIssuedate': token_data.get('issue_date', ''),
+            'avigilonActivatedate': token_data.get('activate_date', ''),
+            'avigilonDeactivatedate': token_data.get('deactivate_date', ''),
             'enrollVirdiAfter': 'false',
         }
         resp = self._request(
@@ -289,27 +289,27 @@ class PlaSecClient:
 
     def update_token_status(
         self, identity_id: str, token_id: str,
-        plasec_status: str, current_token_data: Optional[Dict] = None,
+        avigilon_status: str, current_token_data: Optional[Dict] = None,
     ) -> bool:
         td = current_token_data or {}
         form = {
             'utf8': '\u2713',
             '_method': 'put',
             'authenticity_token': self.csrf_token,
-            'token[plasecTokenstatus]': plasec_status,
-            'token[plasecInternalnumber]': td.get('internal_number', ''),
-            'token[plasecEmbossednumber]': td.get('embossed_number', ''),
-            'token[plasecPIN]': td.get('pin', ''),
-            'token[plasecTokenType]': td.get('token_type', '0'),
-            'token[plasecTokenlevel]': td.get('level', '0'),
-            'token[plasecTokenMobileAppType]': '0',
-            'token[plasecTokenOrigoMobileIdType]': '0',
-            'token[plasecDownload]': 'TRUE',
-            'token[plasecTokenUnitofUpdatePeriod]': '0',
-            'token[plasecTokennoexpire]': 'FALSE',
-            'plasecIssuedate': td.get('issue_date', ''),
-            'plasecActivatedate': td.get('activate_date', ''),
-            'plasecDeactivatedate': td.get('deactivate_date', ''),
+            'token[avigilonTokenstatus]': avigilon_status,
+            'token[avigilonInternalnumber]': td.get('internal_number', ''),
+            'token[avigilonEmbossednumber]': td.get('embossed_number', ''),
+            'token[avigilonPIN]': td.get('pin', ''),
+            'token[avigilonTokenType]': td.get('token_type', '0'),
+            'token[avigilonTokenlevel]': td.get('level', '0'),
+            'token[avigilonTokenMobileAppType]': '0',
+            'token[avigilonTokenOrigoMobileIdType]': '0',
+            'token[avigilonDownload]': 'TRUE',
+            'token[avigilonTokenUnitofUpdatePeriod]': '0',
+            'token[avigilonTokennoexpire]': 'FALSE',
+            'avigilonIssuedate': td.get('issue_date', ''),
+            'avigilonActivatedate': td.get('activate_date', ''),
+            'avigilonDeactivatedate': td.get('deactivate_date', ''),
             'enrollVirdiAfter': 'false',
         }
         resp = self._request(
@@ -370,21 +370,21 @@ class PlaSecClient:
         for identity_elem in root.findall('identity'):
             cn_elem = identity_elem.find('.//cn')
             cn = cn_elem.text if cn_elem is not None else ''
-            fname_elem = identity_elem.find('plasecFname')
-            lname_elem = identity_elem.find('plasecLname')
-            name_elem = identity_elem.find('plasecName')
-            status_elem = identity_elem.find('plasecIdstatus')
+            fname_elem = identity_elem.find('avigilonFname')
+            lname_elem = identity_elem.find('avigilonLname')
+            name_elem = identity_elem.find('avigilonName')
+            status_elem = identity_elem.find('avigilonIdstatus')
 
             first_name = fname_elem.text if fname_elem is not None else ''
             last_name = lname_elem.text if lname_elem is not None else ''
-            plasec_name = name_elem.text if name_elem is not None else ''
+            avigilon_name = name_elem.text if name_elem is not None else ''
 
-            if not first_name and not last_name and plasec_name:
-                parts = [p.strip() for p in plasec_name.split(',')]
+            if not first_name and not last_name and avigilon_name:
+                parts = [p.strip() for p in avigilon_name.split(',')]
                 last_name = parts[0] if parts else ''
                 first_name = parts[1] if len(parts) > 1 else ''
 
-            full_name = f"{first_name} {last_name}".strip() or plasec_name
+            full_name = f"{first_name} {last_name}".strip() or avigilon_name
             raw_status = status_elem.text if status_elem is not None else '1'
 
             results.append({
@@ -416,15 +416,15 @@ class PlaSecClient:
             results.append({
                 'id': cn,
                 'identity_id': identity_id,
-                'internal_number': _text('plasecInternalnumber'),
-                'embossed_number': _text('plasecEmbossednumber'),
-                'pin': _text('plasecPIN'),
-                'status': _text('plasecTokenstatus') or '1',
-                'token_type': _text('plasecTokenType') or '0',
-                'level': _text('plasecTokenlevel') or '0',
-                'issue_date': _text('plasecIssuedate'),
-                'activate_date': _text('plasecActivatedate'),
-                'deactivate_date': _text('plasecDeactivatedate'),
+                'internal_number': _text('avigilonInternalnumber'),
+                'embossed_number': _text('avigilonEmbossednumber'),
+                'pin': _text('avigilonPIN'),
+                'status': _text('avigilonTokenstatus') or '1',
+                'token_type': _text('avigilonTokenType') or '0',
+                'level': _text('avigilonTokenlevel') or '0',
+                'issue_date': _text('avigilonIssuedate'),
+                'activate_date': _text('avigilonActivatedate'),
+                'deactivate_date': _text('avigilonDeactivatedate'),
             })
         return results
 
@@ -441,67 +441,67 @@ class PlaSecClient:
             fmt_id = raw.get('cn', '') or raw.get('id', '')
         return {
             'id': str(fmt_id),
-            'name': str(attrs.get('plasecName', '') or ''),
-            'facility_code': str(attrs.get('plaseccfmtFacilitycode', '') or ''),
-            'total_bits': str(attrs.get('plaseccfmtMaxdigits', '') or ''),
-            'fc_bits': str(attrs.get('plaseccfmtFcodelen', '') or ''),
-            'cn_bits': str(attrs.get('plaseccfmtCardlen', '') or ''),
-            'format_type': str(attrs.get('plaseccfmtType', '') or ''),
+            'name': str(attrs.get('avigilonName', '') or ''),
+            'facility_code': str(attrs.get('avigiloncfmtFacilitycode', '') or ''),
+            'total_bits': str(attrs.get('avigiloncfmtMaxdigits', '') or ''),
+            'fc_bits': str(attrs.get('avigiloncfmtFcodelen', '') or ''),
+            'cn_bits': str(attrs.get('avigiloncfmtCardlen', '') or ''),
+            'format_type': str(attrs.get('avigiloncfmtType', '') or ''),
         }
 
     def _normalize_identity(self, raw: Dict) -> Dict:
         if 'attributes' in raw:
             attrs = raw.get('attributes', {})
             identity_id = raw.get('id', '') or attrs.get('cn', '')
-            first_name = attrs.get('plasecFname', '') or ''
-            last_name = attrs.get('plasecLname', '') or ''
-            plasec_name = attrs.get('plasecName', '') or ''
+            first_name = attrs.get('avigilonFname', '') or ''
+            last_name = attrs.get('avigilonLname', '') or ''
+            avigilon_name = attrs.get('avigilonName', '') or ''
 
-            if not first_name and not last_name and plasec_name:
-                parts = [p.strip() for p in plasec_name.split(',')]
+            if not first_name and not last_name and avigilon_name:
+                parts = [p.strip() for p in avigilon_name.split(',')]
                 last_name = parts[0] if parts else ''
                 first_name = parts[1] if len(parts) > 1 else ''
 
-            full_name = f"{first_name} {last_name}".strip() or plasec_name
-            raw_status = str(attrs.get('plasecIdstatus', '') or '')
+            full_name = f"{first_name} {last_name}".strip() or avigilon_name
+            raw_status = str(attrs.get('avigilonIdstatus', '') or '')
 
             return {
                 'id': identity_id,
                 'first_name': first_name,
                 'last_name': last_name,
                 'full_name': full_name,
-                'email': attrs.get('plasecidentityEmailaddress', '') or '',
-                'phone': attrs.get('plasecidentityPhone', '') or '',
-                'work_phone': attrs.get('plasecidentityWorkphone', '') or '',
+                'email': attrs.get('avigilonidentityEmailaddress', '') or '',
+                'phone': attrs.get('avigilonidentityPhone', '') or '',
+                'work_phone': attrs.get('avigilonidentityWorkphone', '') or '',
                 'status': self._normalize_identity_status(raw_status),
-                'title': attrs.get('plasecidentityTitle', '') or '',
-                'department': attrs.get('plasecidentityDepartment', '') or '',
+                'title': attrs.get('avigilonidentityTitle', '') or '',
+                'department': attrs.get('avigilonidentityDepartment', '') or '',
             }
 
         identity_id = raw.get('cn', '') or raw.get('id', '')
-        first_name = raw.get('plasecFname', '') or ''
-        last_name = raw.get('plasecLname', '') or ''
-        plasec_name = raw.get('plasecName', '') or ''
+        first_name = raw.get('avigilonFname', '') or ''
+        last_name = raw.get('avigilonLname', '') or ''
+        avigilon_name = raw.get('avigilonName', '') or ''
 
-        if not first_name and not last_name and plasec_name:
-            parts = [p.strip() for p in plasec_name.split(',')]
+        if not first_name and not last_name and avigilon_name:
+            parts = [p.strip() for p in avigilon_name.split(',')]
             last_name = parts[0] if parts else ''
             first_name = parts[1] if len(parts) > 1 else ''
 
-        full_name = f"{first_name} {last_name}".strip() or plasec_name
-        raw_status = str(raw.get('plasecIdstatus', '') or raw.get('status', ''))
+        full_name = f"{first_name} {last_name}".strip() or avigilon_name
+        raw_status = str(raw.get('avigilonIdstatus', '') or raw.get('status', ''))
 
         return {
             'id': identity_id,
             'first_name': first_name,
             'last_name': last_name,
             'full_name': full_name,
-            'email': raw.get('plasecidentityEmailaddress', '') or '',
-            'phone': raw.get('plasecidentityPhone', '') or '',
-            'work_phone': raw.get('plasecidentityWorkphone', '') or '',
+            'email': raw.get('avigilonidentityEmailaddress', '') or '',
+            'phone': raw.get('avigilonidentityPhone', '') or '',
+            'work_phone': raw.get('avigilonidentityWorkphone', '') or '',
             'status': self._normalize_identity_status(raw_status),
-            'title': raw.get('plasecidentityTitle', '') or '',
-            'department': raw.get('plasecidentityDepartment', '') or '',
+            'title': raw.get('avigilonidentityTitle', '') or '',
+            'department': raw.get('avigilonidentityDepartment', '') or '',
         }
 
     _TOKEN_STATUS_MAP = {
@@ -532,21 +532,21 @@ class PlaSecClient:
                 activate_date = ext.get('formatted_activate_date', '') or ''
                 deactivate_date = ext.get('formatted_deactivate_date', '') or ''
             else:
-                raw_status = str(attrs.get('plasecTokenstatus', '1') or '1')
+                raw_status = str(attrs.get('avigilonTokenstatus', '1') or '1')
                 status = self._normalize_identity_status(raw_status)
-                issue_date = attrs.get('plasecIssuedate', '') or ''
-                activate_date = attrs.get('plasecActivatedate', '') or ''
-                deactivate_date = attrs.get('plasecDeactivatedate', '') or ''
+                issue_date = attrs.get('avigilonIssuedate', '') or ''
+                activate_date = attrs.get('avigilonActivatedate', '') or ''
+                deactivate_date = attrs.get('avigilonDeactivatedate', '') or ''
 
             return {
                 'id': raw.get('id', '') or attrs.get('cn', ''),
                 'identity_id': identity_id,
-                'internal_number': str(attrs.get('plasecInternalnumber', '') or ''),
-                'embossed_number': str(attrs.get('plasecEmbossednumber', '') or ''),
-                'pin': str(attrs.get('plasecPIN', '') or ''),
+                'internal_number': str(attrs.get('avigilonInternalnumber', '') or ''),
+                'embossed_number': str(attrs.get('avigilonEmbossednumber', '') or ''),
+                'pin': str(attrs.get('avigilonPIN', '') or ''),
                 'status': status,
-                'token_type': str(attrs.get('TokenTypeId') or attrs.get('plasecTokenType', '0') or '0'),
-                'level': str(attrs.get('plasecTokenlevel', '0') or '0'),
+                'token_type': str(attrs.get('TokenTypeId') or attrs.get('avigilonTokenType', '0') or '0'),
+                'level': str(attrs.get('avigilonTokenlevel', '0') or '0'),
                 'issue_date': issue_date,
                 'activate_date': activate_date,
                 'deactivate_date': deactivate_date,
@@ -555,13 +555,13 @@ class PlaSecClient:
         return {
             'id': raw.get('cn', '') or raw.get('id', ''),
             'identity_id': identity_id,
-            'internal_number': str(raw.get('plasecInternalnumber', '') or ''),
-            'embossed_number': str(raw.get('plasecEmbossednumber', '') or ''),
-            'pin': str(raw.get('plasecPIN', '') or ''),
-            'status': str(raw.get('plasecTokenstatus', '1') or '1'),
-            'token_type': str(raw.get('plasecTokenType', '0') or '0'),
-            'level': str(raw.get('plasecTokenlevel', '0') or '0'),
-            'issue_date': raw.get('plasecIssuedate', '') or '',
-            'activate_date': raw.get('plasecActivatedate', '') or '',
-            'deactivate_date': raw.get('plasecDeactivatedate', '') or '',
+            'internal_number': str(raw.get('avigilonInternalnumber', '') or ''),
+            'embossed_number': str(raw.get('avigilonEmbossednumber', '') or ''),
+            'pin': str(raw.get('avigilonPIN', '') or ''),
+            'status': str(raw.get('avigilonTokenstatus', '1') or '1'),
+            'token_type': str(raw.get('avigilonTokenType', '0') or '0'),
+            'level': str(raw.get('avigilonTokenlevel', '0') or '0'),
+            'issue_date': raw.get('avigilonIssuedate', '') or '',
+            'activate_date': raw.get('avigilonActivatedate', '') or '',
+            'deactivate_date': raw.get('avigilonDeactivatedate', '') or '',
         }

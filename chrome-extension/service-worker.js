@@ -1,7 +1,7 @@
 /**
  * Avigilon Unity Chrome Plugin — Service Worker
  *
- * Stateless sync engine that compares live Plasec data (via bridge)
+ * Stateless sync engine that compares live Avigilon data (via bridge)
  * against live AccessGrid data to determine what actions are needed.
  * No local sync state DB — safe to run from multiple machines.
  *
@@ -25,14 +25,14 @@ const ALARM_PERIOD_MINUTES = 1;
 const DEBOUNCE_MS = 5000;
 const MAX_LOG_LINES = 500;
 
-const PLASEC_TO_AG_STATUS = {
+const AVIGILON_TO_AG_STATUS = {
   '1': 'active',
   '2': 'suspended',
   '3': 'suspended',
   '4': 'suspended',
 };
 
-const AG_TO_PLASEC_STATUS = {
+const AG_TO_AVIGILON_STATUS = {
   active: '1',
   suspended: '2',
   created: '1',
@@ -100,7 +100,7 @@ async function getAGClient() {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge communication (Plasec via localhost HTTP)
+// Bridge communication (Avigilon via localhost HTTP)
 // ---------------------------------------------------------------------------
 
 async function bridgeFetch(path, options = {}) {
@@ -149,33 +149,33 @@ async function isBridgeHealthy() {
 // ---------------------------------------------------------------------------
 
 async function buildSnapshot(agClient, templateId) {
-  log('INFO', 'Building snapshot: fetching identities from Plasec via bridge...');
-  const identitiesResp = await bridgeFetch('/api/plasec/identities');
+  log('INFO', 'Building snapshot: fetching identities from Avigilon via bridge...');
+  const identitiesResp = await bridgeFetch('/api/avigilon/identities');
   const identities = identitiesResp.identities || [];
 
-  const plasecIdentities = new Map();
-  const plasecTokens = new Map();
+  const avigilonIdentities = new Map();
+  const avigilonTokens = new Map();
   let totalTokens = 0;
   let activeIdentities = 0;
   let skippedInactive = 0;
 
   for (const ident of identities) {
     if (!ident.id) continue;
-    plasecIdentities.set(ident.id, ident);
+    avigilonIdentities.set(ident.id, ident);
   }
 
-  log('INFO', `Plasec: ${plasecIdentities.size} identities loaded`);
+  log('INFO', `Avigilon: ${avigilonIdentities.size} identities loaded`);
 
-  for (const [iid, ident] of plasecIdentities) {
+  for (const [iid, ident] of avigilonIdentities) {
     if (ident.status !== '1') {
       skippedInactive++;
       continue;
     }
     activeIdentities++;
     try {
-      const tokResp = await bridgeFetch(`/api/plasec/identities/${iid}/tokens`);
+      const tokResp = await bridgeFetch(`/api/avigilon/identities/${iid}/tokens`);
       const tokens = tokResp.tokens || [];
-      plasecTokens.set(iid, tokens);
+      avigilonTokens.set(iid, tokens);
       totalTokens += tokens.length;
       if (tokens.length > 0) {
         const agTokens = tokens.filter(t => (t.embossed_number || '').toLowerCase() === 'accessgrid');
@@ -185,11 +185,11 @@ async function buildSnapshot(agClient, templateId) {
       }
     } catch (e) {
       log('WARN', `Failed to fetch tokens for ${ident.full_name || iid} (${iid}): ${e.message}`);
-      plasecTokens.set(iid, []);
+      avigilonTokens.set(iid, []);
     }
   }
 
-  log('INFO', `Plasec: ${activeIdentities} active identities, ${skippedInactive} inactive, ${totalTokens} total tokens`);
+  log('INFO', `Avigilon: ${activeIdentities} active identities, ${skippedInactive} inactive, ${totalTokens} total tokens`);
   log('INFO', `Fetching AG cards for template ${templateId}...`);
 
   let agCards = [];
@@ -212,18 +212,18 @@ async function buildSnapshot(agClient, templateId) {
     }
   }
 
-  log('INFO', `Snapshot complete: ${plasecIdentities.size} identities, ${totalTokens} tokens, ${agCards.length} AG cards`);
-  return { plasecIdentities, plasecTokens, agCardsByEmployee, agCardMap };
+  log('INFO', `Snapshot complete: ${avigilonIdentities.size} identities, ${totalTokens} tokens, ${agCards.length} AG cards`);
+  return { avigilonIdentities, avigilonTokens, agCardsByEmployee, agCardMap };
 }
 
 async function phase1NewIdentities(agClient, templateId, snapshot) {
   let provisioned = 0;
   let skipped = 0;
-  const { plasecIdentities, plasecTokens, agCardsByEmployee } = snapshot;
+  const { avigilonIdentities, avigilonTokens, agCardsByEmployee } = snapshot;
 
   log('INFO', 'Phase 1: Checking for new identities to provision...');
 
-  for (const [iid, tokens] of plasecTokens) {
+  for (const [iid, tokens] of avigilonTokens) {
     for (const token of tokens) {
       if (!token.id) continue;
       if (token.status !== '1') { skipped++; continue; }
@@ -235,9 +235,9 @@ async function phase1NewIdentities(agClient, templateId, snapshot) {
         continue;
       }
 
-      let identity = plasecIdentities.get(iid);
+      let identity = avigilonIdentities.get(iid);
       try {
-        const detail = await bridgeFetch(`/api/plasec/identities/${iid}`);
+        const detail = await bridgeFetch(`/api/avigilon/identities/${iid}`);
         if (detail && detail.id) identity = detail;
       } catch (e) {
         log('WARN', `  Failed to fetch detail for ${iid}: ${e.message}`);
@@ -283,11 +283,11 @@ async function phase1NewIdentities(agClient, templateId, snapshot) {
 
 async function phase2StatusChanges(agClient, snapshot) {
   let updated = 0;
-  const { plasecTokens, agCardsByEmployee } = snapshot;
+  const { avigilonTokens, agCardsByEmployee } = snapshot;
 
   log('INFO', 'Phase 2: Checking for status changes...');
 
-  for (const [iid, tokens] of plasecTokens) {
+  for (const [iid, tokens] of avigilonTokens) {
     const agCards = agCardsByEmployee.get(iid) || [];
     if (agCards.length === 0) continue;
 
@@ -307,7 +307,7 @@ async function phase2StatusChanges(agClient, snapshot) {
         continue;
       }
 
-      const desiredAGState = PLASEC_TO_AG_STATUS[token.status] || 'suspended';
+      const desiredAGState = AVIGILON_TO_AG_STATUS[token.status] || 'suspended';
 
       for (const card of agCards) {
         const currentAGState = (card.state || 'active').toLowerCase();
@@ -316,11 +316,11 @@ async function phase2StatusChanges(agClient, snapshot) {
 
         try {
           if (desiredAGState === 'suspended' && currentAGState === 'active') {
-            log('INFO', `  Suspending card ${card.id} (plasec token ${token.id} status=${token.status})`);
+            log('INFO', `  Suspending card ${card.id} (avigilon token ${token.id} status=${token.status})`);
             await agClient.accessCards.suspend({ cardId: card.id });
             updated++;
           } else if (desiredAGState === 'active' && currentAGState === 'suspended') {
-            log('INFO', `  Resuming card ${card.id} (plasec token ${token.id} status=${token.status})`);
+            log('INFO', `  Resuming card ${card.id} (avigilon token ${token.id} status=${token.status})`);
             await agClient.accessCards.resume({ cardId: card.id });
             updated++;
           }
@@ -337,16 +337,16 @@ async function phase2StatusChanges(agClient, snapshot) {
 
 async function phase3Deletions(agClient, snapshot) {
   let deleted = 0;
-  const { plasecIdentities, plasecTokens, agCardsByEmployee } = snapshot;
+  const { avigilonIdentities, avigilonTokens, agCardsByEmployee } = snapshot;
 
   log('INFO', 'Phase 3: Checking for deletions...');
 
   for (const [employeeId, cards] of agCardsByEmployee) {
-    if (!plasecIdentities.has(employeeId)) {
+    if (!avigilonIdentities.has(employeeId)) {
       for (const card of cards) {
         if ((card.state || '').toLowerCase() === 'deleted') continue;
         try {
-          log('INFO', `  Deleting card ${card.id} — identity ${employeeId} gone from Plasec`);
+          log('INFO', `  Deleting card ${card.id} — identity ${employeeId} gone from Avigilon`);
           await agClient.accessCards.delete({ cardId: card.id });
           deleted++;
         } catch (e) {
@@ -356,7 +356,7 @@ async function phase3Deletions(agClient, snapshot) {
       continue;
     }
 
-    const tokens = plasecTokens.get(employeeId) || [];
+    const tokens = avigilonTokens.get(employeeId) || [];
     const hasAccessGridToken = tokens.some(t => (t.embossed_number || '').toLowerCase() === 'accessgrid');
 
     if (!hasAccessGridToken) {
@@ -377,39 +377,39 @@ async function phase3Deletions(agClient, snapshot) {
   return deleted;
 }
 
-async function phase4AGToPlasec(snapshot) {
+async function phase4AGToAvigilon(snapshot) {
   let updated = 0;
-  const { plasecTokens, agCardsByEmployee } = snapshot;
+  const { avigilonTokens, agCardsByEmployee } = snapshot;
 
-  log('INFO', 'Phase 4: Checking for AG → Plasec status sync...');
+  log('INFO', 'Phase 4: Checking for AG → Avigilon status sync...');
 
   for (const [iid, cards] of agCardsByEmployee) {
-    const tokens = plasecTokens.get(iid) || [];
+    const tokens = avigilonTokens.get(iid) || [];
 
     for (const card of cards) {
       const agState = (card.state || 'active').toLowerCase();
-      const desiredPlasec = AG_TO_PLASEC_STATUS[agState];
-      if (!desiredPlasec) continue;
+      const desiredAvigilon = AG_TO_AVIGILON_STATUS[agState];
+      if (!desiredAvigilon) continue;
 
       const token = tokens.find(t =>
-        (t.embossed_number || '').toLowerCase() === 'accessgrid' && t.status !== desiredPlasec
+        (t.embossed_number || '').toLowerCase() === 'accessgrid' && t.status !== desiredAvigilon
       );
       if (!token) continue;
 
       try {
-        log('INFO', `  Updating Plasec token ${token.id} to status ${desiredPlasec} (AG card ${card.id} is ${agState})`);
-        await bridgeFetch(`/api/plasec/identities/${iid}/tokens/${token.id}/status`, {
+        log('INFO', `  Updating Avigilon token ${token.id} to status ${desiredAvigilon} (AG card ${card.id} is ${agState})`);
+        await bridgeFetch(`/api/avigilon/identities/${iid}/tokens/${token.id}/status`, {
           method: 'PUT',
-          body: JSON.stringify({ status: desiredPlasec, current_token_data: token }),
+          body: JSON.stringify({ status: desiredAvigilon, current_token_data: token }),
         });
         updated++;
       } catch (e) {
-        log('ERROR', `  Failed to update Plasec token ${token.id}: ${e.message}`);
+        log('ERROR', `  Failed to update Avigilon token ${token.id}: ${e.message}`);
       }
     }
   }
 
-  log('INFO', `Phase 4 done: ${updated} Plasec update(s)`);
+  log('INFO', `Phase 4 done: ${updated} Avigilon update(s)`);
   return updated;
 }
 
@@ -420,17 +420,17 @@ async function phase5Retries() {
 
 async function phase6FieldChanges(agClient, snapshot) {
   let changed = 0;
-  const { plasecIdentities, agCardsByEmployee } = snapshot;
+  const { avigilonIdentities, agCardsByEmployee } = snapshot;
 
   log('INFO', 'Phase 6: Checking for field changes...');
 
   for (const [iid, cards] of agCardsByEmployee) {
-    const identity = plasecIdentities.get(iid);
+    const identity = avigilonIdentities.get(iid);
     if (!identity) continue;
 
     let detail = identity;
     try {
-      const resp = await bridgeFetch(`/api/plasec/identities/${iid}`);
+      const resp = await bridgeFetch(`/api/avigilon/identities/${iid}`);
       if (resp && resp.id) detail = resp;
     } catch {
       continue;
@@ -504,11 +504,11 @@ async function runSyncCycle() {
       new: await phase1NewIdentities(agClient, templateId, snapshot),
       statusChanges: await phase2StatusChanges(agClient, snapshot),
       deleted: await phase3Deletions(agClient, snapshot),
-      agToPlasec: await phase4AGToPlasec(snapshot),
+      agToAvigilon: await phase4AGToAvigilon(snapshot),
       retried: await phase5Retries(),
       fieldChanges: await phase6FieldChanges(agClient, snapshot),
       duration: Date.now() - startTime,
-      identityCount: snapshot.plasecIdentities.size,
+      identityCount: snapshot.avigilonIdentities.size,
       agCardCount: snapshot.agCardMap.size,
     };
 
@@ -517,7 +517,7 @@ async function runSyncCycle() {
     lastSyncError = null;
 
     log('INFO', `=== Sync cycle complete in ${results.duration}ms ===`);
-    log('INFO', `Results: +${results.new} new, ${results.statusChanges} status, -${results.deleted} deleted, ${results.agToPlasec} ag→plasec, ${results.fieldChanges} fields`);
+    log('INFO', `Results: +${results.new} new, ${results.statusChanges} status, -${results.deleted} deleted, ${results.agToAvigilon} ag→avigilon, ${results.fieldChanges} fields`);
     return results;
 
   } catch (e) {

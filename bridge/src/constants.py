@@ -30,28 +30,28 @@ def ensure_config_dir():
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
-# Plasec identity status codes
-PLASEC_IDENTITY_STATUS_ACTIVE = "1"
-PLASEC_IDENTITY_STATUS_INACTIVE = "2"
+# Avigilon identity status codes
+AVIGILON_IDENTITY_STATUS_ACTIVE = "1"
+AVIGILON_IDENTITY_STATUS_INACTIVE = "2"
 
-# Plasec token status codes
-PLASEC_TOKEN_STATUS_ACTIVE = "1"
-PLASEC_TOKEN_STATUS_INACTIVE = "2"
-PLASEC_TOKEN_STATUS_NOT_YET_ACTIVE = "3"
-PLASEC_TOKEN_STATUS_EXPIRED = "4"
+# Avigilon token status codes
+AVIGILON_TOKEN_STATUS_ACTIVE = "1"
+AVIGILON_TOKEN_STATUS_INACTIVE = "2"
+AVIGILON_TOKEN_STATUS_NOT_YET_ACTIVE = "3"
+AVIGILON_TOKEN_STATUS_EXPIRED = "4"
 
-# Plasec token type
-PLASEC_TOKEN_TYPE_STANDARD = "0"
+# Avigilon token type
+AVIGILON_TOKEN_TYPE_STANDARD = "0"
 
 # Status mappings
-PLASEC_TO_AG_STATUS = {
+AVIGILON_TO_AG_STATUS = {
     "1": "active",
     "2": "suspended",
     "3": "suspended",
     "4": "suspended",
 }
 
-AG_TO_PLASEC_STATUS = {
+AG_TO_AVIGILON_STATUS = {
     "active": "1",
     "suspended": "2",
     "created": "1",

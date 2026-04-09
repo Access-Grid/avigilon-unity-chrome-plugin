@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Fake Avigilon / Plasec server for local development and testing.
+Fake Avigilon / Avigilon server for local development and testing.
 
-Faithfully replicates the real Plasec HTTP API behaviour as documented
+Faithfully replicates the real Avigilon HTTP API behaviour as documented
 in accessgrid-avigilon-doc.txt, including:
 
   - POST /sessions              → login, sets _session_id + XSRF-TOKEN cookies
@@ -18,7 +18,7 @@ in accessgrid-avigilon-doc.txt, including:
   - GET  /card_formats.json     → card format list
   - GET  /sessions/new          → login page (HTML)
 
-Uses HTTPS with a self-signed certificate to match real Plasec behaviour.
+Uses HTTPS with a self-signed certificate to match real Avigilon behaviour.
 Stores data in memory — resets on restart.
 
 Usage:
@@ -77,7 +77,7 @@ PHOTOS = {}  # keyed by identity_id -> [photo_data]
 
 
 def _seed_data():
-    """Populate initial test data matching real Plasec responses."""
+    """Populate initial test data matching real Avigilon responses."""
     people = [
         {'fname': 'System', 'lname': 'Administrator', 'login': 'admin',
          'email': 'admin@accessgrid.com', 'phone': '', 'title': 'Administrator',
@@ -121,32 +121,32 @@ def _seed_data():
 
         IDENTITIES[cn] = {
             'cn': cn,
-            'plasecFname': p['fname'],
-            'plasecLname': p['lname'],
-            'plasecName': f"{p['lname']}, {p['fname']}",
-            'plasecIdstatus': p['status'],
-            'plasecLogin': p['login'],
-            'plasecidentityEmailaddress': p['email'],
-            'plasecidentityPhone': p['phone'],
-            'plasecidentityWorkphone': '',
-            'plasecidentityTitle': p['title'],
-            'plasecidentityDepartment': p['department'],
-            'plasecidentityDivision': '',
-            'plasecidentityAddress': '',
-            'plasecidentityCity': '',
-            'plasecidentityState': '',
-            'plasecidentityZipcode': '',
-            'plasecIssuedate': now_iso,
-            'plasecTyp': 'Employee' if p['login'] != 'admin' else '1',
-            'plasecidentityForcedPasswordChange': 'TRUE',
-            'plasecidentityMultifactorAuthentication': 'FALSE',
-            'plasecidentityPagetimeout': '600000',
+            'avigilonFname': p['fname'],
+            'avigilonLname': p['lname'],
+            'avigilonName': f"{p['lname']}, {p['fname']}",
+            'avigilonIdstatus': p['status'],
+            'avigilonLogin': p['login'],
+            'avigilonidentityEmailaddress': p['email'],
+            'avigilonidentityPhone': p['phone'],
+            'avigilonidentityWorkphone': '',
+            'avigilonidentityTitle': p['title'],
+            'avigilonidentityDepartment': p['department'],
+            'avigilonidentityDivision': '',
+            'avigilonidentityAddress': '',
+            'avigilonidentityCity': '',
+            'avigilonidentityState': '',
+            'avigilonidentityZipcode': '',
+            'avigilonIssuedate': now_iso,
+            'avigilonTyp': 'Employee' if p['login'] != 'admin' else '1',
+            'avigilonidentityForcedPasswordChange': 'TRUE',
+            'avigilonidentityMultifactorAuthentication': 'FALSE',
+            'avigilonidentityPagetimeout': '600000',
             'createTimestamp': now_ldap,
             'modifyTimestamp': now_ldap,
-            'structuralObjectClass': 'plasecIdentity',
+            'structuralObjectClass': 'avigilonIdentity',
             'entryUUID': str(uuid.uuid4()),
             'hasSubordinates': 'TRUE',
-            'plasecidentityRoleDN': [f'cn={_new_id()},ou=roles,dc=plasec'],
+            'avigilonidentityRoleDN': [f'cn={_new_id()},ou=roles,dc=avigilon'],
         }
 
         # Give active identities tokens — some with AccessGrid embossed number
@@ -157,21 +157,21 @@ def _seed_data():
             card_num = str(10000 + i)
             TOKENS[cn][tid1] = {
                 'cn': tid1,
-                'plasecInternalnumber': card_num,
-                'plasecEmbossednumber': 'AccessGrid',
-                'plasecPIN': '',
-                'plasecTokenstatus': '1',
-                'plasecTokenType': '0',
-                'plasecTokenlevel': '0',
-                'plasecDownload': 'TRUE',
-                'plasecTokenMobileAppType': '0',
-                'plasecTokenOrigoMobileIdType': '1',
-                'plasecTokenUnitofUpdatePeriod': '0',
-                'plasecTokennoexpire': 'FALSE',
-                'plasecIssuedate': now_ldap,
-                'plasecActivatedate': now_ldap,
-                'plasecDeactivatedate': (datetime.now(timezone.utc) + timedelta(days=365)).strftime('%Y%m%d%H%M%SZ'),
-                'plasecTokenEnableReValidation': 'FALSE',
+                'avigilonInternalnumber': card_num,
+                'avigilonEmbossednumber': 'AccessGrid',
+                'avigilonPIN': '',
+                'avigilonTokenstatus': '1',
+                'avigilonTokenType': '0',
+                'avigilonTokenlevel': '0',
+                'avigilonDownload': 'TRUE',
+                'avigilonTokenMobileAppType': '0',
+                'avigilonTokenOrigoMobileIdType': '1',
+                'avigilonTokenUnitofUpdatePeriod': '0',
+                'avigilonTokennoexpire': 'FALSE',
+                'avigilonIssuedate': now_ldap,
+                'avigilonActivatedate': now_ldap,
+                'avigilonDeactivatedate': (datetime.now(timezone.utc) + timedelta(days=365)).strftime('%Y%m%d%H%M%SZ'),
+                'avigilonTokenEnableReValidation': 'FALSE',
                 'token_status': 'Active',
                 'formatted_issue_date': now_iso,
                 'formatted_activate_date': now_iso,
@@ -184,8 +184,8 @@ def _seed_data():
                 TOKENS[cn][tid2] = {
                     **TOKENS[cn][tid1],
                     'cn': tid2,
-                    'plasecInternalnumber': str(20000 + i),
-                    'plasecEmbossednumber': str(20000 + i),
+                    'avigilonInternalnumber': str(20000 + i),
+                    'avigilonEmbossednumber': str(20000 + i),
                     'token_status': 'Active',
                 }
 
@@ -198,12 +198,12 @@ def _seed_data():
         fid = _new_id()
         CARD_FORMATS[fid] = {
             'cn': fid,
-            'plasecName': name,
-            'plaseccfmtFacilitycode': fc,
-            'plaseccfmtMaxdigits': bits,
-            'plaseccfmtFcodelen': '8',
-            'plaseccfmtCardlen': str(int(bits) - 10),
-            'plaseccfmtType': 'wiegand',
+            'avigilonName': name,
+            'avigiloncfmtFacilitycode': fc,
+            'avigiloncfmtMaxdigits': bits,
+            'avigiloncfmtFcodelen': '8',
+            'avigiloncfmtCardlen': str(int(bits) - 10),
+            'avigiloncfmtType': 'wiegand',
         }
 
     logger.info(f"Seeded {len(IDENTITIES)} identities, "
@@ -244,7 +244,7 @@ def _check_csrf():
 
 @app.route('/sessions/new', methods=['GET'])
 def sessions_new():
-    return '<html><body><h1>Plasec Login</h1><form method="POST" action="/sessions"><input name="login"><input name="password" type="password"><button>Login</button></form></body></html>'
+    return '<html><body><h1>Avigilon Login</h1><form method="POST" action="/sessions"><input name="login"><input name="password" type="password"><button>Login</button></form></body></html>'
 
 
 @app.route('/sessions', methods=['POST'])
@@ -309,17 +309,17 @@ def identities_json():
             'type': 'Identity',
             'attributes': {
                 'cn': cn,
-                'plasecFname': ident['plasecFname'],
-                'plasecLname': ident['plasecLname'],
-                'plasecName': ident['plasecName'],
-                'plasecIdstatus': int(ident['plasecIdstatus']),
-                'plasecIssuedate': ident['plasecIssuedate'],
-                'plasecidentityPagetimeout': ident['plasecidentityPagetimeout'],
-                'structuralObjectClass': 'plasecIdentity',
+                'avigilonFname': ident['avigilonFname'],
+                'avigilonLname': ident['avigilonLname'],
+                'avigilonName': ident['avigilonName'],
+                'avigilonIdstatus': int(ident['avigilonIdstatus']),
+                'avigilonIssuedate': ident['avigilonIssuedate'],
+                'avigilonidentityPagetimeout': ident['avigilonidentityPagetimeout'],
+                'structuralObjectClass': 'avigilonIdentity',
                 'createTimestamp': ident['createTimestamp'],
                 'modifyTimestamp': ident['modifyTimestamp'],
                 'hasSubordinates': ident['hasSubordinates'] == 'TRUE',
-                'dn': f"cn={cn},ou=identities,dc=plasec",
+                'dn': f"cn={cn},ou=identities,dc=avigilon",
             },
         })
 
@@ -352,21 +352,21 @@ def identity_detail_json(cn):
             'type': 'Token',
             'attributes': {
                 'cn': tid,
-                'plasecDownload': tok['plasecDownload'] == 'TRUE',
-                'plasecTokenlevel': int(tok['plasecTokenlevel']),
-                'plasecInternalnumber': tok['plasecInternalnumber'],
-                'plasecTokenMobileAppType': int(tok['plasecTokenMobileAppType']),
-                'plasecTokenstatus': int(tok['plasecTokenstatus']),
-                'plasecTokenType': int(tok['plasecTokenType']),
-                'plasecTokenUnitofUpdatePeriod': int(tok['plasecTokenUnitofUpdatePeriod']),
-                'plasecEmbossednumber': tok['plasecEmbossednumber'],
-                'plasecTokennoexpire': tok['plasecTokennoexpire'] == 'TRUE',
-                'plasecIssuedate': tok.get('formatted_issue_date', ''),
-                'plasecActivatedate': tok.get('formatted_activate_date', ''),
-                'plasecDeactivatedate': tok.get('formatted_deactivate_date', ''),
-                'dn': f"cn={tid},ou=tokens,cn={cn},ou=identities,dc=plasec",
-                'plasecName': None,
-                'plasecLastdoor': '',
+                'avigilonDownload': tok['avigilonDownload'] == 'TRUE',
+                'avigilonTokenlevel': int(tok['avigilonTokenlevel']),
+                'avigilonInternalnumber': tok['avigilonInternalnumber'],
+                'avigilonTokenMobileAppType': int(tok['avigilonTokenMobileAppType']),
+                'avigilonTokenstatus': int(tok['avigilonTokenstatus']),
+                'avigilonTokenType': int(tok['avigilonTokenType']),
+                'avigilonTokenUnitofUpdatePeriod': int(tok['avigilonTokenUnitofUpdatePeriod']),
+                'avigilonEmbossednumber': tok['avigilonEmbossednumber'],
+                'avigilonTokennoexpire': tok['avigilonTokennoexpire'] == 'TRUE',
+                'avigilonIssuedate': tok.get('formatted_issue_date', ''),
+                'avigilonActivatedate': tok.get('formatted_activate_date', ''),
+                'avigilonDeactivatedate': tok.get('formatted_deactivate_date', ''),
+                'dn': f"cn={tid},ou=tokens,cn={cn},ou=identities,dc=avigilon",
+                'avigilonName': None,
+                'avigilonLastdoor': '',
             },
         })
 
@@ -375,35 +375,35 @@ def identity_detail_json(cn):
         'type': 'Identity',
         'attributes': {
             'cn': cn,
-            'plasecFname': ident['plasecFname'],
-            'plasecLname': ident['plasecLname'],
-            'plasecName': ident['plasecName'],
-            'plasecIdstatus': int(ident['plasecIdstatus']),
-            'plasecidentityEmailaddress': ident.get('plasecidentityEmailaddress', ''),
-            'plasecidentityPhone': ident.get('plasecidentityPhone', ''),
-            'plasecidentityWorkphone': ident.get('plasecidentityWorkphone', ''),
-            'plasecidentityTitle': ident.get('plasecidentityTitle', ''),
-            'plasecidentityDepartment': ident.get('plasecidentityDepartment', ''),
-            'plasecidentityDivision': ident.get('plasecidentityDivision', ''),
-            'plasecidentityAddress': ident.get('plasecidentityAddress', ''),
-            'plasecidentityCity': ident.get('plasecidentityCity', ''),
-            'plasecidentityState': ident.get('plasecidentityState', ''),
-            'plasecidentityZipcode': ident.get('plasecidentityZipcode', ''),
-            'plasecidentityForcedPasswordChange': ident['plasecidentityForcedPasswordChange'] == 'TRUE',
-            'plasecidentityMultifactorAuthentication': ident['plasecidentityMultifactorAuthentication'] == 'TRUE',
-            'plasecidentityPagetimeout': ident['plasecidentityPagetimeout'],
-            'plasecIssuedate': ident['plasecIssuedate'],
-            'plasecTyp': ident.get('plasecTyp', ''),
-            'structuralObjectClass': 'plasecIdentity',
+            'avigilonFname': ident['avigilonFname'],
+            'avigilonLname': ident['avigilonLname'],
+            'avigilonName': ident['avigilonName'],
+            'avigilonIdstatus': int(ident['avigilonIdstatus']),
+            'avigilonidentityEmailaddress': ident.get('avigilonidentityEmailaddress', ''),
+            'avigilonidentityPhone': ident.get('avigilonidentityPhone', ''),
+            'avigilonidentityWorkphone': ident.get('avigilonidentityWorkphone', ''),
+            'avigilonidentityTitle': ident.get('avigilonidentityTitle', ''),
+            'avigilonidentityDepartment': ident.get('avigilonidentityDepartment', ''),
+            'avigilonidentityDivision': ident.get('avigilonidentityDivision', ''),
+            'avigilonidentityAddress': ident.get('avigilonidentityAddress', ''),
+            'avigilonidentityCity': ident.get('avigilonidentityCity', ''),
+            'avigilonidentityState': ident.get('avigilonidentityState', ''),
+            'avigilonidentityZipcode': ident.get('avigilonidentityZipcode', ''),
+            'avigilonidentityForcedPasswordChange': ident['avigilonidentityForcedPasswordChange'] == 'TRUE',
+            'avigilonidentityMultifactorAuthentication': ident['avigilonidentityMultifactorAuthentication'] == 'TRUE',
+            'avigilonidentityPagetimeout': ident['avigilonidentityPagetimeout'],
+            'avigilonIssuedate': ident['avigilonIssuedate'],
+            'avigilonTyp': ident.get('avigilonTyp', ''),
+            'structuralObjectClass': 'avigilonIdentity',
             'createTimestamp': ident['createTimestamp'],
             'modifyTimestamp': ident['modifyTimestamp'],
             'hasSubordinates': ident['hasSubordinates'] == 'TRUE',
-            'dn': f"cn={cn},ou=identities,dc=plasec",
-            'creatorsName': ['cn=0,ou=identities,dc=plasec'],
-            'modifiersName': ['cn=0,ou=identities,dc=plasec'],
-            'entryDN': [f'cn={cn},ou=identities,dc=plasec'],
+            'dn': f"cn={cn},ou=identities,dc=avigilon",
+            'creatorsName': ['cn=0,ou=identities,dc=avigilon'],
+            'modifiersName': ['cn=0,ou=identities,dc=avigilon'],
+            'entryDN': [f'cn={cn},ou=identities,dc=avigilon'],
             'subschemaSubentry': ['cn=Subschema'],
-            'plasecidentityRoleDN': ident.get('plasecidentityRoleDN', []),
+            'avigilonidentityRoleDN': ident.get('avigilonidentityRoleDN', []),
         },
         'tokens': tokens_list,
     })
@@ -420,35 +420,35 @@ def identities_xml():
     lines = ['<identities type="array">']
     for cn, ident in sorted(IDENTITIES.items()):
         lines.append('<identity>')
-        lines.append(f'<dn>cn={cn},ou=identities,dc=plasec</dn>')
+        lines.append(f'<dn>cn={cn},ou=identities,dc=avigilon</dn>')
         lines.append(f'<cns type="array"><cn>{cn}</cn></cns>')
         lines.append(f'<createTimestamp>{ident["createTimestamp"]}</createTimestamp>')
-        lines.append(f'<creatorsName>cn=0,ou=identities,dc=plasec</creatorsName>')
-        lines.append(f'<entryDN>cn={cn},ou=identities,dc=plasec</entryDN>')
+        lines.append(f'<creatorsName>cn=0,ou=identities,dc=avigilon</creatorsName>')
+        lines.append(f'<entryDN>cn={cn},ou=identities,dc=avigilon</entryDN>')
         lines.append(f'<entryUUID>{ident["entryUUID"]}</entryUUID>')
         lines.append(f'<hasSubordinates>{ident["hasSubordinates"]}</hasSubordinates>')
         lines.append(f'<modifyTimestamp>{ident["modifyTimestamp"]}</modifyTimestamp>')
-        lines.append('<objectClasses type="array"><objectClass>plasecIdentity</objectClass></objectClasses>')
-        if ident['plasecFname']:
-            lines.append(f'<plasecFname>{ident["plasecFname"]}</plasecFname>')
-        lines.append(f'<plasecIdstatus>{ident["plasecIdstatus"]}</plasecIdstatus>')
-        lines.append(f'<plasecIssuedate>{ident["plasecIssuedate"]}</plasecIssuedate>')
-        if ident['plasecLname']:
-            lines.append(f'<plasecLname>{ident["plasecLname"]}</plasecLname>')
-        lines.append(f'<plasecName>{ident["plasecName"]}</plasecName>')
-        if ident.get('plasecLogin'):
-            lines.append(f'<plasecLogin>{ident["plasecLogin"]}</plasecLogin>')
-        lines.append('<plasecidentityDarkModes type="array"><plasecidentityDarkMode>default</plasecidentityDarkMode></plasecidentityDarkModes>')
-        lines.append(f'<plasecidentityForcedPasswordChange>{ident["plasecidentityForcedPasswordChange"]}</plasecidentityForcedPasswordChange>')
-        lines.append(f'<plasecidentityMultifactorAuthentication>{ident["plasecidentityMultifactorAuthentication"]}</plasecidentityMultifactorAuthentication>')
-        lines.append(f'<plasecidentityPagetimeout>{ident["plasecidentityPagetimeout"]}</plasecidentityPagetimeout>')
-        role_dns = ident.get('plasecidentityRoleDN', [])
+        lines.append('<objectClasses type="array"><objectClass>avigilonIdentity</objectClass></objectClasses>')
+        if ident['avigilonFname']:
+            lines.append(f'<avigilonFname>{ident["avigilonFname"]}</avigilonFname>')
+        lines.append(f'<avigilonIdstatus>{ident["avigilonIdstatus"]}</avigilonIdstatus>')
+        lines.append(f'<avigilonIssuedate>{ident["avigilonIssuedate"]}</avigilonIssuedate>')
+        if ident['avigilonLname']:
+            lines.append(f'<avigilonLname>{ident["avigilonLname"]}</avigilonLname>')
+        lines.append(f'<avigilonName>{ident["avigilonName"]}</avigilonName>')
+        if ident.get('avigilonLogin'):
+            lines.append(f'<avigilonLogin>{ident["avigilonLogin"]}</avigilonLogin>')
+        lines.append('<avigilonidentityDarkModes type="array"><avigilonidentityDarkMode>default</avigilonidentityDarkMode></avigilonidentityDarkModes>')
+        lines.append(f'<avigilonidentityForcedPasswordChange>{ident["avigilonidentityForcedPasswordChange"]}</avigilonidentityForcedPasswordChange>')
+        lines.append(f'<avigilonidentityMultifactorAuthentication>{ident["avigilonidentityMultifactorAuthentication"]}</avigilonidentityMultifactorAuthentication>')
+        lines.append(f'<avigilonidentityPagetimeout>{ident["avigilonidentityPagetimeout"]}</avigilonidentityPagetimeout>')
+        role_dns = ident.get('avigilonidentityRoleDN', [])
         if role_dns:
-            lines.append('<plasecidentityRoleDNs type="array">')
+            lines.append('<avigilonidentityRoleDNs type="array">')
             for rdn in role_dns:
-                lines.append(f'<plasecidentityRoleDN>{rdn}</plasecidentityRoleDN>')
-            lines.append('</plasecidentityRoleDNs>')
-        lines.append('<structuralObjectClass>plasecIdentity</structuralObjectClass>')
+                lines.append(f'<avigilonidentityRoleDN>{rdn}</avigilonidentityRoleDN>')
+            lines.append('</avigilonidentityRoleDNs>')
+        lines.append('<structuralObjectClass>avigilonIdentity</structuralObjectClass>')
         lines.append('<subschemaSubentry>cn=Subschema</subschemaSubentry>')
         lines.append('</identity>')
     lines.append('</identities>')
@@ -474,11 +474,11 @@ def tokens_json(cn):
             'type': 'Token',
             'attributes': {
                 'cn': tid,
-                'plasecInternalnumber': tok['plasecInternalnumber'],
-                'plasecEmbossednumber': tok['plasecEmbossednumber'],
-                'plasecTokenlevel': tok['plasecTokenlevel'],
-                'TokenTypeId': int(tok['plasecTokenType']),
-                'plasecTokenType': tok['plasecTokenType'],
+                'avigilonInternalnumber': tok['avigilonInternalnumber'],
+                'avigilonEmbossednumber': tok['avigilonEmbossednumber'],
+                'avigilonTokenlevel': tok['avigilonTokenlevel'],
+                'TokenTypeId': int(tok['avigilonTokenType']),
+                'avigilonTokenType': tok['avigilonTokenType'],
                 'extended_attributes': {
                     'token_status': tok.get('token_status', 'Active'),
                     'formatted_issue_date': tok.get('formatted_issue_date', ''),
@@ -506,23 +506,23 @@ def tokens_xml(cn):
     lines = ['<tokens type="array">']
     for tid, tok in TOKENS.get(cn, {}).items():
         lines.append('<token>')
-        lines.append(f'<dn>cn={tid},ou=tokens,cn={cn},ou=identities,dc=plasec</dn>')
+        lines.append(f'<dn>cn={tid},ou=tokens,cn={cn},ou=identities,dc=avigilon</dn>')
         lines.append(f'<cns type="array"><cn>{tid}</cn></cns>')
         lines.append(f'<entryUUID>{uuid.uuid4()}</entryUUID>')
-        lines.append('<objectClasses type="array"><objectClass>plasecToken</objectClass></objectClasses>')
-        lines.append(f'<plasecActivatedate>{tok["plasecActivatedate"]}</plasecActivatedate>')
-        lines.append(f'<plasecDeactivatedate>{tok["plasecDeactivatedate"]}</plasecDeactivatedate>')
-        lines.append(f'<plasecDownload>{tok["plasecDownload"]}</plasecDownload>')
-        lines.append(f'<plasecEmbossednumber>{tok["plasecEmbossednumber"]}</plasecEmbossednumber>')
-        lines.append(f'<plasecInternalnumber>{tok["plasecInternalnumber"]}</plasecInternalnumber>')
-        lines.append(f'<plasecIssuedate>{tok["plasecIssuedate"]}</plasecIssuedate>')
-        lines.append(f'<plasecTokenMobileAppType>{tok["plasecTokenMobileAppType"]}</plasecTokenMobileAppType>')
-        lines.append(f'<plasecTokenOrigoMobileIdType>{tok.get("plasecTokenOrigoMobileIdType", "1")}</plasecTokenOrigoMobileIdType>')
-        lines.append(f'<plasecTokenType>{tok["plasecTokenType"]}</plasecTokenType>')
-        lines.append(f'<plasecTokenUnitofUpdatePeriod>{tok["plasecTokenUnitofUpdatePeriod"]}</plasecTokenUnitofUpdatePeriod>')
-        lines.append(f'<plasecTokenlevel>{tok["plasecTokenlevel"]}</plasecTokenlevel>')
-        lines.append(f'<plasecTokennoexpire>{tok["plasecTokennoexpire"]}</plasecTokennoexpire>')
-        lines.append(f'<plasecTokenstatus>{tok["plasecTokenstatus"]}</plasecTokenstatus>')
+        lines.append('<objectClasses type="array"><objectClass>avigilonToken</objectClass></objectClasses>')
+        lines.append(f'<avigilonActivatedate>{tok["avigilonActivatedate"]}</avigilonActivatedate>')
+        lines.append(f'<avigilonDeactivatedate>{tok["avigilonDeactivatedate"]}</avigilonDeactivatedate>')
+        lines.append(f'<avigilonDownload>{tok["avigilonDownload"]}</avigilonDownload>')
+        lines.append(f'<avigilonEmbossednumber>{tok["avigilonEmbossednumber"]}</avigilonEmbossednumber>')
+        lines.append(f'<avigilonInternalnumber>{tok["avigilonInternalnumber"]}</avigilonInternalnumber>')
+        lines.append(f'<avigilonIssuedate>{tok["avigilonIssuedate"]}</avigilonIssuedate>')
+        lines.append(f'<avigilonTokenMobileAppType>{tok["avigilonTokenMobileAppType"]}</avigilonTokenMobileAppType>')
+        lines.append(f'<avigilonTokenOrigoMobileIdType>{tok.get("avigilonTokenOrigoMobileIdType", "1")}</avigilonTokenOrigoMobileIdType>')
+        lines.append(f'<avigilonTokenType>{tok["avigilonTokenType"]}</avigilonTokenType>')
+        lines.append(f'<avigilonTokenUnitofUpdatePeriod>{tok["avigilonTokenUnitofUpdatePeriod"]}</avigilonTokenUnitofUpdatePeriod>')
+        lines.append(f'<avigilonTokenlevel>{tok["avigilonTokenlevel"]}</avigilonTokenlevel>')
+        lines.append(f'<avigilonTokennoexpire>{tok["avigilonTokennoexpire"]}</avigilonTokennoexpire>')
+        lines.append(f'<avigilonTokenstatus>{tok["avigilonTokenstatus"]}</avigilonTokenstatus>')
         lines.append('</token>')
     lines.append('</tokens>')
 
@@ -542,49 +542,49 @@ def create_identity():
     now_iso = _now_iso()
 
     # Parse form data (same field names as the real API)
-    lname = request.form.get('identity[plasecLname]', '')
-    fname = request.form.get('identity[plasecFname]', '')
-    email = request.form.get('identity[plasecidentityEmailaddress]', '')
-    phone = request.form.get('identity[plasecidentityPhone]', '')
-    workphone = request.form.get('identity[plasecidentityWorkphone]', '')
-    title = request.form.get('identity[plasecidentityTitle]', '')
-    department = request.form.get('identity[plasecidentityDepartment]', '')
-    division = request.form.get('identity[plasecidentityDivision]', '')
-    address = request.form.get('identity[plasecidentityAddress]', '')
-    city = request.form.get('identity[plasecidentityCity]', '')
-    state = request.form.get('identity[plasecidentityState]', '')
-    zipcode = request.form.get('identity[plasecidentityZipcode]', '')
-    status = request.form.get('identity[plasecIdstatus]', '1')
-    typ = request.form.get('identity[plasecTyp]', 'Employee')
+    lname = request.form.get('identity[avigilonLname]', '')
+    fname = request.form.get('identity[avigilonFname]', '')
+    email = request.form.get('identity[avigilonidentityEmailaddress]', '')
+    phone = request.form.get('identity[avigilonidentityPhone]', '')
+    workphone = request.form.get('identity[avigilonidentityWorkphone]', '')
+    title = request.form.get('identity[avigilonidentityTitle]', '')
+    department = request.form.get('identity[avigilonidentityDepartment]', '')
+    division = request.form.get('identity[avigilonidentityDivision]', '')
+    address = request.form.get('identity[avigilonidentityAddress]', '')
+    city = request.form.get('identity[avigilonidentityCity]', '')
+    state = request.form.get('identity[avigilonidentityState]', '')
+    zipcode = request.form.get('identity[avigilonidentityZipcode]', '')
+    status = request.form.get('identity[avigilonIdstatus]', '1')
+    typ = request.form.get('identity[avigilonTyp]', 'Employee')
 
     IDENTITIES[cn] = {
         'cn': cn,
-        'plasecFname': fname,
-        'plasecLname': lname,
-        'plasecName': f"{lname}, {fname}" if fname and lname else lname or fname,
-        'plasecIdstatus': status,
-        'plasecLogin': '',
-        'plasecidentityEmailaddress': email,
-        'plasecidentityPhone': phone,
-        'plasecidentityWorkphone': workphone,
-        'plasecidentityTitle': title,
-        'plasecidentityDepartment': department,
-        'plasecidentityDivision': division,
-        'plasecidentityAddress': address,
-        'plasecidentityCity': city,
-        'plasecidentityState': state,
-        'plasecidentityZipcode': zipcode,
-        'plasecIssuedate': now_iso,
-        'plasecTyp': typ,
-        'plasecidentityForcedPasswordChange': request.form.get('identity[plasecidentityForcedPasswordChange]', 'TRUE'),
-        'plasecidentityMultifactorAuthentication': 'FALSE',
-        'plasecidentityPagetimeout': request.form.get('identity[plasecidentityPagetimeout]', '600000'),
+        'avigilonFname': fname,
+        'avigilonLname': lname,
+        'avigilonName': f"{lname}, {fname}" if fname and lname else lname or fname,
+        'avigilonIdstatus': status,
+        'avigilonLogin': '',
+        'avigilonidentityEmailaddress': email,
+        'avigilonidentityPhone': phone,
+        'avigilonidentityWorkphone': workphone,
+        'avigilonidentityTitle': title,
+        'avigilonidentityDepartment': department,
+        'avigilonidentityDivision': division,
+        'avigilonidentityAddress': address,
+        'avigilonidentityCity': city,
+        'avigilonidentityState': state,
+        'avigilonidentityZipcode': zipcode,
+        'avigilonIssuedate': now_iso,
+        'avigilonTyp': typ,
+        'avigilonidentityForcedPasswordChange': request.form.get('identity[avigilonidentityForcedPasswordChange]', 'TRUE'),
+        'avigilonidentityMultifactorAuthentication': 'FALSE',
+        'avigilonidentityPagetimeout': request.form.get('identity[avigilonidentityPagetimeout]', '600000'),
         'createTimestamp': now_ldap,
         'modifyTimestamp': now_ldap,
-        'structuralObjectClass': 'plasecIdentity',
+        'structuralObjectClass': 'avigilonIdentity',
         'entryUUID': str(uuid.uuid4()),
         'hasSubordinates': 'FALSE',
-        'plasecidentityRoleDN': [],
+        'avigilonidentityRoleDN': [],
     }
     TOKENS[cn] = {}
 
@@ -607,26 +607,26 @@ def create_token(cn):
     now_ldap = _now_ldap()
     now_iso = _now_iso()
 
-    internal = request.form.get('token[plasecInternalnumber]', '')
-    embossed = request.form.get('token[plasecEmbossednumber]', '')
+    internal = request.form.get('token[avigilonInternalnumber]', '')
+    embossed = request.form.get('token[avigilonEmbossednumber]', '')
 
     TOKENS.setdefault(cn, {})[tid] = {
         'cn': tid,
-        'plasecInternalnumber': internal,
-        'plasecEmbossednumber': embossed,
-        'plasecPIN': request.form.get('token[plasecPIN]', ''),
-        'plasecTokenstatus': request.form.get('token[plasecTokenstatus]', '1'),
-        'plasecTokenType': request.form.get('token[plasecTokenType]', '0'),
-        'plasecTokenlevel': request.form.get('token[plasecTokenlevel]', '0'),
-        'plasecDownload': request.form.get('token[plasecDownload]', 'TRUE'),
-        'plasecTokenMobileAppType': request.form.get('token[plasecTokenMobileAppType]', '0'),
-        'plasecTokenOrigoMobileIdType': request.form.get('token[plasecTokenOrigoMobileIdType]', '1'),
-        'plasecTokenUnitofUpdatePeriod': request.form.get('token[plasecTokenUnitofUpdatePeriod]', '0'),
-        'plasecTokennoexpire': request.form.get('token[plasecTokennoexpire]', 'FALSE'),
-        'plasecIssuedate': now_ldap,
-        'plasecActivatedate': request.form.get('plasecActivatedate', now_ldap),
-        'plasecDeactivatedate': request.form.get('plasecDeactivatedate', (datetime.now(timezone.utc) + timedelta(days=365)).strftime('%Y%m%d%H%M%SZ')),
-        'plasecTokenEnableReValidation': 'FALSE',
+        'avigilonInternalnumber': internal,
+        'avigilonEmbossednumber': embossed,
+        'avigilonPIN': request.form.get('token[avigilonPIN]', ''),
+        'avigilonTokenstatus': request.form.get('token[avigilonTokenstatus]', '1'),
+        'avigilonTokenType': request.form.get('token[avigilonTokenType]', '0'),
+        'avigilonTokenlevel': request.form.get('token[avigilonTokenlevel]', '0'),
+        'avigilonDownload': request.form.get('token[avigilonDownload]', 'TRUE'),
+        'avigilonTokenMobileAppType': request.form.get('token[avigilonTokenMobileAppType]', '0'),
+        'avigilonTokenOrigoMobileIdType': request.form.get('token[avigilonTokenOrigoMobileIdType]', '1'),
+        'avigilonTokenUnitofUpdatePeriod': request.form.get('token[avigilonTokenUnitofUpdatePeriod]', '0'),
+        'avigilonTokennoexpire': request.form.get('token[avigilonTokennoexpire]', 'FALSE'),
+        'avigilonIssuedate': now_ldap,
+        'avigilonActivatedate': request.form.get('avigilonActivatedate', now_ldap),
+        'avigilonDeactivatedate': request.form.get('avigilonDeactivatedate', (datetime.now(timezone.utc) + timedelta(days=365)).strftime('%Y%m%d%H%M%SZ')),
+        'avigilonTokenEnableReValidation': 'FALSE',
         'token_status': 'Active',
         'formatted_issue_date': now_iso,
         'formatted_activate_date': now_iso,
@@ -661,10 +661,10 @@ def update_or_delete_token(cn, tid):
     # Update (method=put)
     tok = TOKENS[cn][tid]
     for field in [
-        'plasecTokenstatus', 'plasecInternalnumber', 'plasecEmbossednumber',
-        'plasecPIN', 'plasecTokenType', 'plasecTokenlevel', 'plasecDownload',
-        'plasecTokenMobileAppType', 'plasecTokenOrigoMobileIdType',
-        'plasecTokenUnitofUpdatePeriod', 'plasecTokennoexpire',
+        'avigilonTokenstatus', 'avigilonInternalnumber', 'avigilonEmbossednumber',
+        'avigilonPIN', 'avigilonTokenType', 'avigilonTokenlevel', 'avigilonDownload',
+        'avigilonTokenMobileAppType', 'avigilonTokenOrigoMobileIdType',
+        'avigilonTokenUnitofUpdatePeriod', 'avigilonTokennoexpire',
     ]:
         form_key = f'token[{field}]'
         if form_key in request.form:
@@ -672,16 +672,16 @@ def update_or_delete_token(cn, tid):
 
     # Update status string to match numeric
     status_map = {'1': 'Active', '2': 'Inactive', '3': 'Not yet active', '4': 'Expired'}
-    tok['token_status'] = status_map.get(tok['plasecTokenstatus'], 'Active')
+    tok['token_status'] = status_map.get(tok['avigilonTokenstatus'], 'Active')
 
-    for date_field in ['plasecIssuedate', 'plasecActivatedate', 'plasecDeactivatedate']:
+    for date_field in ['avigilonIssuedate', 'avigilonActivatedate', 'avigilonDeactivatedate']:
         if date_field in request.form:
             tok[date_field] = request.form[date_field]
 
     tok['modifyTimestamp'] = _now_ldap()
     IDENTITIES[cn]['modifyTimestamp'] = _now_ldap()
 
-    logger.info(f"Updated token: {tid} for identity {cn} (status={tok['plasecTokenstatus']})")
+    logger.info(f"Updated token: {tid} for identity {cn} (status={tok['avigilonTokenstatus']})")
     return redirect(f'/identities/{cn}/tokens/{tid}', code=302)
 
 
@@ -698,9 +698,9 @@ def photos_xml(cn):
     for photo in PHOTOS.get(cn, []):
         lines.append('<object>')
         lines.append(f'<cn>{photo.get("cn", "0")}</cn>')
-        lines.append(f'<plasecidentityPrimaryimage type="boolean">{str(photo.get("primary", True)).lower()}</plasecidentityPrimaryimage>')
-        lines.append(f'<plasecidentityFilename>{photo.get("filename", "photo.jpeg")}</plasecidentityFilename>')
-        lines.append(f'<plasecidentityContentype>image/jpeg</plasecidentityContentype>')
+        lines.append(f'<avigilonidentityPrimaryimage type="boolean">{str(photo.get("primary", True)).lower()}</avigilonidentityPrimaryimage>')
+        lines.append(f'<avigilonidentityFilename>{photo.get("filename", "photo.jpeg")}</avigilonidentityFilename>')
+        lines.append(f'<avigilonidentityContentype>image/jpeg</avigilonidentityContentype>')
         lines.append('</object>')
     lines.append('</objects>')
     return Response('\n'.join(lines), mimetype='application/xml')
@@ -721,12 +721,12 @@ def card_formats_json():
             'type': 'CardFormat',
             'attributes': {
                 'cn': fid,
-                'plasecName': fmt['plasecName'],
-                'plaseccfmtFacilitycode': fmt['plaseccfmtFacilitycode'],
-                'plaseccfmtMaxdigits': fmt['plaseccfmtMaxdigits'],
-                'plaseccfmtFcodelen': fmt['plaseccfmtFcodelen'],
-                'plaseccfmtCardlen': fmt['plaseccfmtCardlen'],
-                'plaseccfmtType': fmt['plaseccfmtType'],
+                'avigilonName': fmt['avigilonName'],
+                'avigiloncfmtFacilitycode': fmt['avigiloncfmtFacilitycode'],
+                'avigiloncfmtMaxdigits': fmt['avigiloncfmtMaxdigits'],
+                'avigiloncfmtFcodelen': fmt['avigiloncfmtFcodelen'],
+                'avigiloncfmtCardlen': fmt['avigiloncfmtCardlen'],
+                'avigiloncfmtType': fmt['avigiloncfmtType'],
             },
         })
 
@@ -800,7 +800,7 @@ def generate_self_signed_cert(cert_dir):
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description='Fake Avigilon / Plasec Server')
+    parser = argparse.ArgumentParser(description='Fake Avigilon / Avigilon Server')
     parser.add_argument('--port', type=int, default=8443, help='Port to listen on (default: 8443)')
     parser.add_argument('--no-ssl', action='store_true', help='Run without SSL (HTTP only)')
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')

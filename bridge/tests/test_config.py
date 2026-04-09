@@ -39,7 +39,7 @@ class TestConfigFile:
     def test_save_and_load_roundtrip(self, tmp_path):
         config_file = str(tmp_path / 'config.json')
         config = {
-            'plasec': {
+            'avigilon': {
                 'host': '10.0.0.1',
                 'username': 'admin',
                 'password': 'secret123',
@@ -58,12 +58,12 @@ class TestConfigFile:
             # Verify the file exists and password is encrypted
             with open(config_file) as f:
                 raw = json.load(f)
-            assert raw['plasec']['password'] != 'secret123'
+            assert raw['avigilon']['password'] != 'secret123'
             assert raw['accessgrid']['api_secret'] != 'supersecret'
 
             # Load and verify decryption
             loaded = load_config()
-            assert loaded['plasec']['host'] == '10.0.0.1'
-            assert loaded['plasec']['password'] == 'secret123'
+            assert loaded['avigilon']['host'] == '10.0.0.1'
+            assert loaded['avigilon']['password'] == 'secret123'
             assert loaded['accessgrid']['api_secret'] == 'supersecret'
             assert loaded['accessgrid']['template_id'] == 'tmpl1'
