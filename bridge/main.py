@@ -233,6 +233,12 @@ class SettingsWindow:
             messagebox.showerror("Error", str(e))
 
     def _test_accessgrid(self):
+        import hmac
+        import hashlib
+        import base64
+        import json as _json
+        import requests as req_lib
+
         account_id = self.ag_account.get().strip()
         api_secret = self.ag_secret.get()
         template_id = self.ag_template.get().strip()
@@ -242,13 +248,6 @@ class SettingsWindow:
             return
 
         try:
-            import hmac
-            import hashlib
-            import base64
-            import json as _json
-            import urllib.request
-            import urllib.error
-
             # Build the same HMAC signature the AccessGrid SDK uses
             if template_id:
                 path = f'/v1/console/card-templates/{template_id}'
@@ -263,47 +262,49 @@ class SettingsWindow:
             ).hexdigest()
 
             url = f'https://api.accessgrid.com{path}'
+            params = {}
             if template_id:
-                url += f'?sig_payload={urllib.parse.quote(sig_payload)}'
+                params['sig_payload'] = sig_payload
 
-            req = urllib.request.Request(url, method='GET')
-            req.add_header('Content-Type', 'application/json')
-            req.add_header('X-ACCT-ID', account_id)
-            req.add_header('X-PAYLOAD-SIG', signature)
+            resp = req_lib.get(
+                url,
+                params=params,
+                headers={
+                    'Content-Type': 'application/json',
+                    'X-ACCT-ID': account_id,
+                    'X-PAYLOAD-SIG': signature,
+                },
+                timeout=10,
+            )
 
-            import urllib.parse
-            resp = urllib.request.urlopen(req, timeout=10)
-            data = _json.loads(resp.read())
-
-            if template_id:
-                name = data.get('name', 'unknown')
-                protocol = data.get('protocol', 'unknown')
-                messagebox.showinfo(
-                    "Success",
-                    f"AccessGrid credentials valid!\n\nTemplate: {name}\nProtocol: {protocol}"
-                )
-            else:
-                messagebox.showinfo("Success", "AccessGrid credentials valid!")
-
-        except urllib.error.HTTPError as e:
-            if e.code == 401:
+            if resp.status_code == 401:
                 messagebox.showerror(
                     "Authentication Failed",
                     "Invalid Account ID or API Secret.\n\nPlease check your AccessGrid credentials."
                 )
-            elif e.code == 404:
+            elif resp.status_code == 404 and template_id:
+                messagebox.showerror(
+                    "Template Not Found",
+                    f"Credentials are valid but template '{template_id}' was not found."
+                )
+            elif resp.status_code == 200:
+                data = resp.json()
                 if template_id:
-                    messagebox.showerror(
-                        "Template Not Found",
-                        f"Credentials are valid but template '{template_id}' was not found."
+                    name = data.get('name', 'unknown')
+                    protocol = data.get('protocol', 'unknown')
+                    messagebox.showinfo(
+                        "Success",
+                        f"AccessGrid credentials valid!\n\nTemplate: {name}\nProtocol: {protocol}"
                     )
                 else:
                     messagebox.showinfo("Success", "AccessGrid credentials valid!")
             else:
-                body = e.read().decode() if e.fp else ''
-                messagebox.showerror("Error", f"HTTP {e.code}: {body[:200]}")
-        except Exception as e:
+                messagebox.showerror("Error", f"HTTP {resp.status_code}: {resp.text[:200]}")
+
+        except req_lib.RequestException as e:
             messagebox.showerror("Error", f"Could not reach AccessGrid API:\n{e}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Unexpected error:\n{e}")
 
     def _copy_log(self):
         self.log_text.configure(state=tk.NORMAL)
