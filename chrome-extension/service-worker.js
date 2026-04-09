@@ -200,7 +200,9 @@ async function buildSnapshot(agClient, templateId) {
     log('ERROR', `Failed to list AG cards: ${e.message}`);
   }
 
+  // Index AG cards by employeeId and by (employeeId, tokenId) via metadata
   const agCardsByEmployee = new Map();
+  const agCardsByToken = new Map();  // key: "employeeId:tokenId"
   const agCardMap = new Map();
   for (const card of agCards) {
     agCardMap.set(card.id, card);
@@ -209,17 +211,24 @@ async function buildSnapshot(agClient, templateId) {
         agCardsByEmployee.set(card.employeeId, []);
       }
       agCardsByEmployee.get(card.employeeId).push(card);
+
+      // Per-token index via metadata.avigilon_token_id
+      const tokenId = (card.metadata || {}).avigilon_token_id;
+      if (tokenId) {
+        const key = `${card.employeeId}:${tokenId}`;
+        agCardsByToken.set(key, card);
+      }
     }
   }
 
-  log('INFO', `Snapshot complete: ${avigilonIdentities.size} identities, ${totalTokens} tokens, ${agCards.length} AG cards`);
-  return { avigilonIdentities, avigilonTokens, agCardsByEmployee, agCardMap };
+  log('INFO', `Snapshot complete: ${avigilonIdentities.size} identities, ${totalTokens} tokens, ${agCards.length} AG cards (${agCardsByToken.size} token-matched)`);
+  return { avigilonIdentities, avigilonTokens, agCardsByEmployee, agCardsByToken, agCardMap };
 }
 
 async function phase1NewIdentities(agClient, templateId, snapshot) {
   let provisioned = 0;
   let skipped = 0;
-  const { avigilonIdentities, avigilonTokens, agCardsByEmployee } = snapshot;
+  const { avigilonIdentities, avigilonTokens, agCardsByToken } = snapshot;
 
   log('INFO', 'Phase 1: Checking for new identities to provision...');
 
@@ -229,9 +238,10 @@ async function phase1NewIdentities(agClient, templateId, snapshot) {
       if (token.status !== '1') { skipped++; continue; }
       if ((token.embossed_number || '').toLowerCase() !== 'accessgrid') { skipped++; continue; }
 
-      const existingCards = agCardsByEmployee.get(iid) || [];
-      if (existingCards.length > 0) {
-        log('DEBUG', `  ${iid}: already has ${existingCards.length} AG card(s), skipping`);
+      // Per-token check: does an AG card already exist for this specific token?
+      const tokenKey = `${iid}:${token.id}`;
+      if (agCardsByToken.has(tokenKey)) {
+        log('DEBUG', `  ${iid}/${token.id}: AG card already exists, skipping`);
         continue;
       }
 
@@ -264,15 +274,16 @@ async function phase1NewIdentities(agClient, templateId, snapshot) {
           title: identity.title || undefined,
           startDate: token.activate_date || now,
           expirationDate: token.deactivate_date || oneYearLater,
+          metadata: { avigilon_token_id: token.id },
         };
         if (cardNumber) params.cardNumber = cardNumber;
 
-        log('INFO', `  Provisioning: ${fullName} (${iid}), card#=${cardNumber}, email=${email}`);
+        log('INFO', `  Provisioning: ${fullName} (${iid}), token=${token.id}, card#=${cardNumber}, email=${email}`);
         await agClient.accessCards.provision(params);
         provisioned++;
-        log('INFO', `  Provisioned AG card for ${fullName}`);
+        log('INFO', `  Provisioned AG card for ${fullName} (token ${token.id})`);
       } catch (e) {
-        log('ERROR', `  Failed to provision for ${fullName} (${iid}): ${e.message}`);
+        log('ERROR', `  Failed to provision for ${fullName} (${iid}/${token.id}): ${e.message}`);
       }
     }
   }
@@ -283,50 +294,48 @@ async function phase1NewIdentities(agClient, templateId, snapshot) {
 
 async function phase2StatusChanges(agClient, snapshot) {
   let updated = 0;
-  const { avigilonTokens, agCardsByEmployee } = snapshot;
+  const { avigilonTokens, agCardsByToken, agCardsByEmployee } = snapshot;
 
   log('INFO', 'Phase 2: Checking for status changes...');
 
   for (const [iid, tokens] of avigilonTokens) {
-    const agCards = agCardsByEmployee.get(iid) || [];
-    if (agCards.length === 0) continue;
-
     for (const token of tokens) {
+      if (!token.id) continue;
+
+      // Find the AG card tied to this specific token
+      const tokenKey = `${iid}:${token.id}`;
+      const card = agCardsByToken.get(tokenKey);
+      if (!card) continue;
+      if ((card.state || '').toLowerCase() === 'deleted') continue;
+
+      // If embossed number is no longer AccessGrid, terminate this card
       if ((token.embossed_number || '').toLowerCase() !== 'accessgrid') {
-        for (const card of agCards) {
-          if ((card.state || '').toLowerCase() !== 'deleted') {
-            try {
-              log('INFO', `  Terminating card ${card.id} — embossed no longer AccessGrid`);
-              await agClient.accessCards.delete({ cardId: card.id });
-              updated++;
-            } catch (e) {
-              log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
-            }
-          }
+        try {
+          log('INFO', `  Terminating card ${card.id} — token ${token.id} embossed no longer AccessGrid`);
+          await agClient.accessCards.delete({ cardId: card.id });
+          updated++;
+        } catch (e) {
+          log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
         }
         continue;
       }
 
       const desiredAGState = AVIGILON_TO_AG_STATUS[token.status] || 'suspended';
+      const currentAGState = (card.state || 'active').toLowerCase();
+      if (currentAGState === desiredAGState) continue;
 
-      for (const card of agCards) {
-        const currentAGState = (card.state || 'active').toLowerCase();
-        if (currentAGState === desiredAGState) continue;
-        if (currentAGState === 'deleted') continue;
-
-        try {
-          if (desiredAGState === 'suspended' && currentAGState === 'active') {
-            log('INFO', `  Suspending card ${card.id} (avigilon token ${token.id} status=${token.status})`);
-            await agClient.accessCards.suspend({ cardId: card.id });
-            updated++;
-          } else if (desiredAGState === 'active' && currentAGState === 'suspended') {
-            log('INFO', `  Resuming card ${card.id} (avigilon token ${token.id} status=${token.status})`);
-            await agClient.accessCards.resume({ cardId: card.id });
-            updated++;
-          }
-        } catch (e) {
-          log('ERROR', `  Failed to update AG card ${card.id}: ${e.message}`);
+      try {
+        if (desiredAGState === 'suspended' && currentAGState === 'active') {
+          log('INFO', `  Suspending card ${card.id} (token ${token.id} status=${token.status})`);
+          await agClient.accessCards.suspend({ cardId: card.id });
+          updated++;
+        } else if (desiredAGState === 'active' && currentAGState === 'suspended') {
+          log('INFO', `  Resuming card ${card.id} (token ${token.id} status=${token.status})`);
+          await agClient.accessCards.resume({ cardId: card.id });
+          updated++;
         }
+      } catch (e) {
+        log('ERROR', `  Failed to update AG card ${card.id}: ${e.message}`);
       }
     }
   }
@@ -342,6 +351,7 @@ async function phase3Deletions(agClient, snapshot) {
   log('INFO', 'Phase 3: Checking for deletions...');
 
   for (const [employeeId, cards] of agCardsByEmployee) {
+    // Identity completely gone from Avigilon — delete all cards
     if (!avigilonIdentities.has(employeeId)) {
       for (const card of cards) {
         if ((card.state || '').toLowerCase() === 'deleted') continue;
@@ -356,18 +366,46 @@ async function phase3Deletions(agClient, snapshot) {
       continue;
     }
 
+    // Identity exists — check each card's linked token
     const tokens = avigilonTokens.get(employeeId) || [];
-    const hasAccessGridToken = tokens.some(t => (t.embossed_number || '').toLowerCase() === 'accessgrid');
+    const tokenIds = new Set(tokens.map(t => t.id));
+    const agTokenIds = new Set(
+      tokens.filter(t => (t.embossed_number || '').toLowerCase() === 'accessgrid').map(t => t.id)
+    );
 
-    if (!hasAccessGridToken) {
-      for (const card of cards) {
-        if ((card.state || '').toLowerCase() === 'deleted') continue;
-        try {
-          log('INFO', `  Deleting card ${card.id} — no AccessGrid tokens for ${employeeId}`);
-          await agClient.accessCards.delete({ cardId: card.id });
-          deleted++;
-        } catch (e) {
-          log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
+    for (const card of cards) {
+      if ((card.state || '').toLowerCase() === 'deleted') continue;
+
+      const linkedTokenId = (card.metadata || {}).avigilon_token_id;
+      if (linkedTokenId) {
+        // Token-linked card: delete if the token is gone or no longer AccessGrid
+        if (!tokenIds.has(linkedTokenId)) {
+          try {
+            log('INFO', `  Deleting card ${card.id} — linked token ${linkedTokenId} gone from Avigilon`);
+            await agClient.accessCards.delete({ cardId: card.id });
+            deleted++;
+          } catch (e) {
+            log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
+          }
+        } else if (!agTokenIds.has(linkedTokenId)) {
+          try {
+            log('INFO', `  Deleting card ${card.id} — linked token ${linkedTokenId} no longer AccessGrid`);
+            await agClient.accessCards.delete({ cardId: card.id });
+            deleted++;
+          } catch (e) {
+            log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
+          }
+        }
+      } else {
+        // Legacy card without metadata — fall back to checking if any AG token exists
+        if (agTokenIds.size === 0) {
+          try {
+            log('INFO', `  Deleting card ${card.id} — no AccessGrid tokens for ${employeeId} (legacy card)`);
+            await agClient.accessCards.delete({ cardId: card.id });
+            deleted++;
+          } catch (e) {
+            log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
+          }
         }
       }
     }
@@ -391,9 +429,16 @@ async function phase4AGToAvigilon(snapshot) {
       const desiredAvigilon = AG_TO_AVIGILON_STATUS[agState];
       if (!desiredAvigilon) continue;
 
-      const token = tokens.find(t =>
-        (t.embossed_number || '').toLowerCase() === 'accessgrid' && t.status !== desiredAvigilon
-      );
+      // Find the linked token via metadata, or fall back to first matching
+      const linkedTokenId = (card.metadata || {}).avigilon_token_id;
+      let token;
+      if (linkedTokenId) {
+        token = tokens.find(t => t.id === linkedTokenId && t.status !== desiredAvigilon);
+      } else {
+        token = tokens.find(t =>
+          (t.embossed_number || '').toLowerCase() === 'accessgrid' && t.status !== desiredAvigilon
+        );
+      }
       if (!token) continue;
 
       try {

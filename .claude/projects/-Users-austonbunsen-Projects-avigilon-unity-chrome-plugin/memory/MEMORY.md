@@ -1,1 +1,2 @@
 - [No gh CLI](feedback_no_gh.md) — Never use the gh CLI tool, user does not want it
+- [Always Avigilon](feedback_avigilon_naming.md) — Never say "Plasec", always "Avigilon"
