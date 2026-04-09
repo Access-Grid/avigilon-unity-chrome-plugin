@@ -5,7 +5,7 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      width: 400px;
+      width: 420px;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 13px;
       color: #1a1a1a;
@@ -35,7 +35,6 @@
       border-radius: 6px; font-size: 13px; margin-bottom: 10px;
     }
     input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59,130,246,.15); }
-    .section { border-top: 1px solid #e5e7eb; padding-top: 12px; margin-top: 12px; }
     .btn-row { display: flex; gap: 8px; margin-top: 12px; }
     button {
       padding: 8px 16px; border: 1px solid #d1d5db; border-radius: 6px;
@@ -45,12 +44,8 @@
     button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
     button.primary:hover { background: #1d4ed8; }
     button:disabled { opacity: .5; cursor: not-allowed; }
+    button.small { padding: 4px 10px; font-size: 11px; }
     .sync-btn { width: 100%; }
-    #log {
-      font-family: monospace; font-size: 11px; color: #6b7280; margin-top: 8px;
-      max-height: 100px; overflow-y: auto; white-space: nowrap;
-    }
-    .log-line { overflow: hidden; text-overflow: ellipsis; line-height: 1.6; }
     .tabs { display: flex; border-bottom: 2px solid #e5e7eb; margin-bottom: 12px; }
     .tab {
       padding: 8px 16px; cursor: pointer; border-bottom: 2px solid transparent;
@@ -65,6 +60,23 @@
     .feedback.ok { display: block; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; }
     .feedback.error { display: block; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; }
     .feedback.loading { display: block; background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+    .log-container {
+      background: #1e1e1e; border-radius: 6px; margin-top: 10px; overflow: hidden;
+    }
+    .log-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 6px 10px; background: #2d2d2d; border-bottom: 1px solid #3e3e3e;
+    }
+    .log-header span { color: #9ca3af; font-size: 11px; font-weight: 600; }
+    #log {
+      font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 10px;
+      color: #d4d4d4; padding: 8px 10px; max-height: 180px; overflow-y: auto;
+      white-space: pre; line-height: 1.5;
+    }
+    .log-line { display: block; }
+    .log-line.error { color: #f87171; }
+    .log-line.warn { color: #fbbf24; }
+    .log-line.debug { color: #6b7280; }
   </style>
 </head>
 <body>
@@ -73,6 +85,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="status">Status</div>
     <div class="tab" data-tab="config">Settings</div>
+    <div class="tab" data-tab="logs">Logs</div>
   </div>
 
   <!-- Status Tab -->
@@ -95,7 +108,6 @@
     </div>
 
     <button class="primary sync-btn" id="btn-sync">Run Sync Now</button>
-    <div id="log"></div>
   </div>
 
   <!-- Config Tab -->
@@ -116,6 +128,20 @@
       <button id="btn-test-bridge">Test Bridge</button>
     </div>
     <div id="bridge-feedback" class="feedback"></div>
+  </div>
+
+  <!-- Logs Tab -->
+  <div id="tab-logs" class="tab-content">
+    <div class="log-container">
+      <div class="log-header">
+        <span>Service Worker Log</span>
+        <button class="small" id="btn-copy-log">Copy</button>
+      </div>
+      <div id="log"></div>
+    </div>
+    <div class="btn-row" style="margin-top:8px">
+      <button class="small" id="btn-refresh-log">Refresh</button>
+    </div>
   </div>
 
   <script src="popup.js"></script>

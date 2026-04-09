@@ -23,6 +23,7 @@ const BRIDGE_URL = 'http://localhost:19780';
 const ALARM_NAME = 'avigilon-sync';
 const ALARM_PERIOD_MINUTES = 1;
 const DEBOUNCE_MS = 5000;
+const MAX_LOG_LINES = 500;
 
 const PLASEC_TO_AG_STATUS = {
   '1': 'active',
@@ -46,6 +47,24 @@ let lastSyncTime = null;
 let lastSyncResult = null;
 let lastSyncError = null;
 let debounceTimer = null;
+
+// ---------------------------------------------------------------------------
+// Log buffer — stored in memory, readable by popup via GET_LOGS message
+// ---------------------------------------------------------------------------
+
+const logBuffer = [];
+
+function log(level, ...args) {
+  const ts = new Date().toISOString().replace('T', ' ').replace('Z', '');
+  const msg = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+  const line = `${ts} [${level}] ${msg}`;
+  logBuffer.push(line);
+  while (logBuffer.length > MAX_LOG_LINES) logBuffer.shift();
+
+  if (level === 'ERROR') console.error(`[sync]`, ...args);
+  else if (level === 'WARN') console.warn(`[sync]`, ...args);
+  else console.log(`[sync]`, ...args);
+}
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -97,49 +116,58 @@ async function isBridgeHealthy() {
 // Stateless Sync Engine
 // ---------------------------------------------------------------------------
 
-/**
- * Build a snapshot of the current state from both systems.
- *
- * Returns:
- *   plasecIdentities: Map<identityId, identity>
- *   plasecTokens: Map<identityId, token[]>
- *   agCards: Map<employeeId, card[]>  (employee_id = plasec identity CN)
- *   agCardMap: Map<cardId, card>
- */
 async function buildSnapshot(agClient, templateId) {
-  // Fetch from Plasec via bridge
+  log('INFO', 'Building snapshot: fetching identities from Plasec via bridge...');
   const identitiesResp = await bridgeFetch('/api/plasec/identities');
   const identities = identitiesResp.identities || [];
 
   const plasecIdentities = new Map();
   const plasecTokens = new Map();
+  let totalTokens = 0;
+  let activeIdentities = 0;
+  let skippedInactive = 0;
 
   for (const ident of identities) {
     if (!ident.id) continue;
     plasecIdentities.set(ident.id, ident);
   }
 
-  // Fetch tokens for each active identity
+  log('INFO', `Plasec: ${plasecIdentities.size} identities loaded`);
+
   for (const [iid, ident] of plasecIdentities) {
-    if (ident.status !== '1') continue;
+    if (ident.status !== '1') {
+      skippedInactive++;
+      continue;
+    }
+    activeIdentities++;
     try {
       const tokResp = await bridgeFetch(`/api/plasec/identities/${iid}/tokens`);
-      plasecTokens.set(iid, tokResp.tokens || []);
+      const tokens = tokResp.tokens || [];
+      plasecTokens.set(iid, tokens);
+      totalTokens += tokens.length;
+      if (tokens.length > 0) {
+        const agTokens = tokens.filter(t => (t.embossed_number || '').toLowerCase() === 'accessgrid');
+        if (agTokens.length > 0) {
+          log('DEBUG', `  ${ident.full_name || iid}: ${tokens.length} token(s), ${agTokens.length} AccessGrid`);
+        }
+      }
     } catch (e) {
-      console.warn(`Failed to fetch tokens for ${iid}:`, e);
+      log('WARN', `Failed to fetch tokens for ${ident.full_name || iid} (${iid}): ${e.message}`);
       plasecTokens.set(iid, []);
     }
   }
 
-  // Fetch from AccessGrid
+  log('INFO', `Plasec: ${activeIdentities} active identities, ${skippedInactive} inactive, ${totalTokens} total tokens`);
+  log('INFO', `Fetching AG cards for template ${templateId}...`);
+
   let agCards = [];
   try {
     agCards = await agClient.accessCards.list({ templateId });
+    log('INFO', `AccessGrid: ${agCards.length} card(s) found`);
   } catch (e) {
-    console.warn('Failed to list AG cards:', e);
+    log('ERROR', `Failed to list AG cards: ${e.message}`);
   }
 
-  // Index AG cards by employeeId (= Plasec identity CN)
   const agCardsByEmployee = new Map();
   const agCardMap = new Map();
   for (const card of agCards) {
@@ -152,42 +180,43 @@ async function buildSnapshot(agClient, templateId) {
     }
   }
 
+  log('INFO', `Snapshot complete: ${plasecIdentities.size} identities, ${totalTokens} tokens, ${agCards.length} AG cards`);
   return { plasecIdentities, plasecTokens, agCardsByEmployee, agCardMap };
 }
 
-/**
- * Phase 1: Provision new AG cards for Plasec tokens marked "AccessGrid"
- * that don't yet have a corresponding AG card.
- */
 async function phase1NewIdentities(agClient, templateId, snapshot) {
   let provisioned = 0;
+  let skipped = 0;
   const { plasecIdentities, plasecTokens, agCardsByEmployee } = snapshot;
+
+  log('INFO', 'Phase 1: Checking for new identities to provision...');
 
   for (const [iid, tokens] of plasecTokens) {
     for (const token of tokens) {
       if (!token.id) continue;
-      if (token.status !== '1') continue;
-      if ((token.embossed_number || '').toLowerCase() !== 'accessgrid') continue;
+      if (token.status !== '1') { skipped++; continue; }
+      if ((token.embossed_number || '').toLowerCase() !== 'accessgrid') { skipped++; continue; }
 
-      // Check if AG already has a card for this employee
       const existingCards = agCardsByEmployee.get(iid) || [];
-      if (existingCards.length > 0) continue;
+      if (existingCards.length > 0) {
+        log('DEBUG', `  ${iid}: already has ${existingCards.length} AG card(s), skipping`);
+        continue;
+      }
 
-      // Need full identity detail for email/phone
       let identity = plasecIdentities.get(iid);
       try {
         const detail = await bridgeFetch(`/api/plasec/identities/${iid}`);
         if (detail && detail.id) identity = detail;
       } catch (e) {
-        console.warn(`Failed to fetch detail for ${iid}:`, e);
+        log('WARN', `  Failed to fetch detail for ${iid}: ${e.message}`);
       }
 
       const fullName = identity.full_name || `${identity.first_name || ''} ${identity.last_name || ''}`.trim();
       const email = identity.email || '';
       const phone = identity.phone || '';
 
-      if (!fullName) continue;
-      if (!email && !phone) continue;
+      if (!fullName) { log('WARN', `  ${iid}: no name, skipping`); continue; }
+      if (!email && !phone) { log('WARN', `  ${iid} (${fullName}): no email or phone, skipping`); continue; }
 
       const cardNumber = token.internal_number || token.embossed_number || '';
       const now = new Date().toISOString();
@@ -204,30 +233,27 @@ async function phase1NewIdentities(agClient, templateId, snapshot) {
           startDate: token.activate_date || now,
           expirationDate: token.deactivate_date || oneYearLater,
         };
+        if (cardNumber) params.cardNumber = cardNumber;
 
-        if (cardNumber) {
-          params.cardNumber = cardNumber;
-        }
-
+        log('INFO', `  Provisioning: ${fullName} (${iid}), card#=${cardNumber}, email=${email}`);
         await agClient.accessCards.provision(params);
         provisioned++;
-        console.log(`Provisioned AG card for ${fullName} (${iid})`);
+        log('INFO', `  Provisioned AG card for ${fullName}`);
       } catch (e) {
-        console.error(`Failed to provision for ${iid}:`, e);
+        log('ERROR', `  Failed to provision for ${fullName} (${iid}): ${e.message}`);
       }
     }
   }
 
+  log('INFO', `Phase 1 done: ${provisioned} provisioned, ${skipped} skipped`);
   return provisioned;
 }
 
-/**
- * Phase 2: Push Plasec token status changes to AG.
- * Compare Plasec token status against AG card state.
- */
 async function phase2StatusChanges(agClient, snapshot) {
   let updated = 0;
   const { plasecTokens, agCardsByEmployee } = snapshot;
+
+  log('INFO', 'Phase 2: Checking for status changes...');
 
   for (const [iid, tokens] of plasecTokens) {
     const agCards = agCardsByEmployee.get(iid) || [];
@@ -235,15 +261,14 @@ async function phase2StatusChanges(agClient, snapshot) {
 
     for (const token of tokens) {
       if ((token.embossed_number || '').toLowerCase() !== 'accessgrid') {
-        // Embossed number changed away from AccessGrid — terminate
         for (const card of agCards) {
           if ((card.state || '').toLowerCase() !== 'deleted') {
             try {
+              log('INFO', `  Terminating card ${card.id} — embossed no longer AccessGrid`);
               await agClient.accessCards.delete({ cardId: card.id });
               updated++;
-              console.log(`Terminated AG card ${card.id} — embossed_number no longer AccessGrid`);
             } catch (e) {
-              console.error(`Failed to delete AG card ${card.id}:`, e);
+              log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
             }
           }
         }
@@ -259,74 +284,72 @@ async function phase2StatusChanges(agClient, snapshot) {
 
         try {
           if (desiredAGState === 'suspended' && currentAGState === 'active') {
+            log('INFO', `  Suspending card ${card.id} (plasec token ${token.id} status=${token.status})`);
             await agClient.accessCards.suspend({ cardId: card.id });
             updated++;
           } else if (desiredAGState === 'active' && currentAGState === 'suspended') {
+            log('INFO', `  Resuming card ${card.id} (plasec token ${token.id} status=${token.status})`);
             await agClient.accessCards.resume({ cardId: card.id });
             updated++;
           }
         } catch (e) {
-          console.error(`Failed to update AG card ${card.id} status:`, e);
+          log('ERROR', `  Failed to update AG card ${card.id}: ${e.message}`);
         }
       }
     }
   }
 
+  log('INFO', `Phase 2 done: ${updated} status change(s)`);
   return updated;
 }
 
-/**
- * Phase 3: Terminate AG cards for identities/tokens deleted from Plasec.
- */
 async function phase3Deletions(agClient, snapshot) {
   let deleted = 0;
   const { plasecIdentities, plasecTokens, agCardsByEmployee } = snapshot;
 
+  log('INFO', 'Phase 3: Checking for deletions...');
+
   for (const [employeeId, cards] of agCardsByEmployee) {
-    // Identity gone from Plasec
     if (!plasecIdentities.has(employeeId)) {
       for (const card of cards) {
         if ((card.state || '').toLowerCase() === 'deleted') continue;
         try {
+          log('INFO', `  Deleting card ${card.id} — identity ${employeeId} gone from Plasec`);
           await agClient.accessCards.delete({ cardId: card.id });
           deleted++;
-          console.log(`Deleted AG card ${card.id} — identity ${employeeId} gone from Plasec`);
         } catch (e) {
-          console.error(`Failed to delete AG card ${card.id}:`, e);
+          log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
         }
       }
       continue;
     }
 
-    // Check if any AccessGrid tokens remain for this identity
     const tokens = plasecTokens.get(employeeId) || [];
-    const hasAccessGridToken = tokens.some(
-      t => (t.embossed_number || '').toLowerCase() === 'accessgrid'
-    );
+    const hasAccessGridToken = tokens.some(t => (t.embossed_number || '').toLowerCase() === 'accessgrid');
 
     if (!hasAccessGridToken) {
       for (const card of cards) {
         if ((card.state || '').toLowerCase() === 'deleted') continue;
         try {
+          log('INFO', `  Deleting card ${card.id} — no AccessGrid tokens for ${employeeId}`);
           await agClient.accessCards.delete({ cardId: card.id });
           deleted++;
-          console.log(`Deleted AG card ${card.id} — no AccessGrid tokens for ${employeeId}`);
         } catch (e) {
-          console.error(`Failed to delete AG card ${card.id}:`, e);
+          log('ERROR', `  Failed to delete AG card ${card.id}: ${e.message}`);
         }
       }
     }
   }
 
+  log('INFO', `Phase 3 done: ${deleted} deletion(s)`);
   return deleted;
 }
 
-/**
- * Phase 4: Pull AG card state changes back to Plasec.
- */
-async function phase4AGToPLasec(snapshot) {
+async function phase4AGToPlasec(snapshot) {
   let updated = 0;
   const { plasecTokens, agCardsByEmployee } = snapshot;
+
+  log('INFO', 'Phase 4: Checking for AG → Plasec status sync...');
 
   for (const [iid, cards] of agCardsByEmployee) {
     const tokens = plasecTokens.get(iid) || [];
@@ -336,48 +359,43 @@ async function phase4AGToPLasec(snapshot) {
       const desiredPlasec = AG_TO_PLASEC_STATUS[agState];
       if (!desiredPlasec) continue;
 
-      // Find matching token
       const token = tokens.find(t =>
         (t.embossed_number || '').toLowerCase() === 'accessgrid' && t.status !== desiredPlasec
       );
       if (!token) continue;
 
       try {
+        log('INFO', `  Updating Plasec token ${token.id} to status ${desiredPlasec} (AG card ${card.id} is ${agState})`);
         await bridgeFetch(`/api/plasec/identities/${iid}/tokens/${token.id}/status`, {
           method: 'PUT',
           body: JSON.stringify({ status: desiredPlasec, current_token_data: token }),
         });
         updated++;
-        console.log(`Updated Plasec token ${token.id} to status ${desiredPlasec}`);
       } catch (e) {
-        console.error(`Failed to update Plasec token ${token.id}:`, e);
+        log('ERROR', `  Failed to update Plasec token ${token.id}: ${e.message}`);
       }
     }
   }
 
+  log('INFO', `Phase 4 done: ${updated} Plasec update(s)`);
   return updated;
 }
 
-/**
- * Phase 5: Retry — in stateless mode, phase 1 naturally retries on next cycle.
- * This is a no-op but kept for parity with the reference implementation.
- */
 async function phase5Retries() {
+  log('INFO', 'Phase 5: Retries (implicit in stateless mode)');
   return 0;
 }
 
-/**
- * Phase 6: Push field changes (name, email, phone, title) to AG.
- */
 async function phase6FieldChanges(agClient, snapshot) {
   let changed = 0;
   const { plasecIdentities, agCardsByEmployee } = snapshot;
+
+  log('INFO', 'Phase 6: Checking for field changes...');
 
   for (const [iid, cards] of agCardsByEmployee) {
     const identity = plasecIdentities.get(iid);
     if (!identity) continue;
 
-    // Fetch full detail for email/phone/title
     let detail = identity;
     try {
       const resp = await bridgeFetch(`/api/plasec/identities/${iid}`);
@@ -387,8 +405,6 @@ async function phase6FieldChanges(agClient, snapshot) {
     }
 
     const fullName = detail.full_name || '';
-    const email = detail.email || '';
-    const phone = detail.phone || '';
     const title = detail.title || '';
 
     for (const card of cards) {
@@ -401,23 +417,22 @@ async function phase6FieldChanges(agClient, snapshot) {
       if (Object.keys(updates).length === 0) continue;
 
       try {
+        log('INFO', `  Updating fields for card ${card.id}: ${JSON.stringify(updates)}`);
         await agClient.accessCards.update({ cardId: card.id, ...updates });
         changed++;
       } catch (e) {
-        console.error(`Failed to update AG card ${card.id} fields:`, e);
+        log('ERROR', `  Failed to update AG card ${card.id} fields: ${e.message}`);
       }
     }
   }
 
+  log('INFO', `Phase 6 done: ${changed} field update(s)`);
   return changed;
 }
 
-/**
- * Run a full sync cycle — all 6 phases.
- */
 async function runSyncCycle() {
   if (syncRunning) {
-    console.log('Sync already running, skipping');
+    log('WARN', 'Sync already running, skipping');
     return null;
   }
 
@@ -425,18 +440,19 @@ async function runSyncCycle() {
   const startTime = Date.now();
 
   try {
-    // Check bridge health
+    log('INFO', '=== Sync cycle starting ===');
+
     const healthy = await isBridgeHealthy();
     if (!healthy) {
-      console.log('Bridge not reachable — skipping sync');
+      log('WARN', 'Bridge not reachable at localhost:19780 — skipping sync');
       lastSyncError = 'Bridge not reachable';
       return null;
     }
+    log('INFO', 'Bridge health check: OK');
 
-    // Get AG client
     const agClient = await getAGClient();
     if (!agClient) {
-      console.log('AccessGrid not configured — skipping sync');
+      log('WARN', 'AccessGrid not configured (missing account_id or api_secret) — skipping sync');
       lastSyncError = 'AccessGrid not configured';
       return null;
     }
@@ -444,19 +460,19 @@ async function runSyncCycle() {
     const config = await getConfig();
     const templateId = config.accessgrid?.template_id;
     if (!templateId) {
-      console.log('No template ID configured — skipping sync');
+      log('WARN', 'No template ID configured — skipping sync');
       lastSyncError = 'No template ID';
       return null;
     }
+    log('INFO', `Config: template_id=${templateId}`);
 
-    console.log('Starting sync cycle...');
     const snapshot = await buildSnapshot(agClient, templateId);
 
     const results = {
       new: await phase1NewIdentities(agClient, templateId, snapshot),
       statusChanges: await phase2StatusChanges(agClient, snapshot),
       deleted: await phase3Deletions(agClient, snapshot),
-      agToPlasec: await phase4AGToPLasec(snapshot),
+      agToPlasec: await phase4AGToPlasec(snapshot),
       retried: await phase5Retries(),
       fieldChanges: await phase6FieldChanges(agClient, snapshot),
       duration: Date.now() - startTime,
@@ -468,11 +484,12 @@ async function runSyncCycle() {
     lastSyncResult = results;
     lastSyncError = null;
 
-    console.log('Sync cycle complete:', results);
+    log('INFO', `=== Sync cycle complete in ${results.duration}ms ===`);
+    log('INFO', `Results: +${results.new} new, ${results.statusChanges} status, -${results.deleted} deleted, ${results.agToPlasec} ag→plasec, ${results.fieldChanges} fields`);
     return results;
 
   } catch (e) {
-    console.error('Sync cycle failed:', e);
+    log('ERROR', `Sync cycle failed: ${e.message}`);
     lastSyncError = e.message;
     return null;
   } finally {
@@ -484,21 +501,21 @@ async function runSyncCycle() {
 // Triggers
 // ---------------------------------------------------------------------------
 
-// Alarm-based periodic sync
 chrome.alarms.create(ALARM_NAME, { periodInMinutes: ALARM_PERIOD_MINUTES });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
+    log('DEBUG', 'Alarm trigger fired');
     runSyncCycle();
   }
 });
 
-// Page-load trigger (debounced)
 chrome.webNavigation.onCompleted.addListener((details) => {
-  if (details.frameId !== 0) return; // Only top-level frames
+  if (details.frameId !== 0) return;
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(() => {
     debounceTimer = null;
+    log('DEBUG', `Page load trigger: ${details.url?.substring(0, 80)}`);
     runSyncCycle();
   }, DEBOUNCE_MS);
 });
@@ -519,10 +536,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'FORCE_SYNC') {
+    log('INFO', 'Manual sync triggered from popup');
     runSyncCycle().then(result => {
       sendResponse({ result });
     });
-    return true; // async response
+    return true;
   }
 
   if (message.type === 'GET_CONFIG') {
@@ -531,7 +549,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'SAVE_CONFIG') {
-    saveConfig(message.config).then(() => sendResponse({ ok: true }));
+    saveConfig(message.config).then(() => {
+      log('INFO', 'Config saved from popup');
+      sendResponse({ ok: true });
+    });
     return true;
   }
 
@@ -539,14 +560,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     isBridgeHealthy().then(ok => sendResponse({ healthy: ok }));
     return true;
   }
+
+  if (message.type === 'GET_LOGS') {
+    sendResponse({ logs: logBuffer.slice() });
+    return false;
+  }
 });
 
-// Run initial sync on install/startup
 chrome.runtime.onInstalled.addListener(() => {
-  console.log('Avigilon Unity Sync extension installed');
+  log('INFO', 'Avigilon Unity Sync extension installed');
   runSyncCycle();
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  log('INFO', 'Extension startup');
   runSyncCycle();
 });

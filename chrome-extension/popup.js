@@ -5,19 +5,10 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+    // Auto-refresh logs when switching to logs tab
+    if (tab.dataset.tab === 'logs') loadLogs();
   });
 });
-
-function log(msg) {
-  const el = document.getElementById('log');
-  const ts = new Date().toLocaleTimeString();
-  const line = document.createElement('div');
-  line.className = 'log-line';
-  line.textContent = `${ts}  ${msg}`;
-  el.prepend(line);
-  // Keep max 50 lines
-  while (el.children.length > 50) el.removeChild(el.lastChild);
-}
 
 function setStatus(elId, state, text) {
   const bar = document.getElementById(elId);
@@ -33,7 +24,47 @@ function setFeedback(elId, state, text) {
   el.textContent = text;
 }
 
-// Check bridge health
+// ---------------------------------------------------------------------------
+// Logs
+// ---------------------------------------------------------------------------
+
+function loadLogs() {
+  chrome.runtime.sendMessage({ type: 'GET_LOGS' }, (resp) => {
+    if (!resp?.logs) return;
+    const el = document.getElementById('log');
+    el.innerHTML = '';
+    for (const line of resp.logs) {
+      const span = document.createElement('span');
+      span.className = 'log-line';
+      if (line.includes('[ERROR]')) span.classList.add('error');
+      else if (line.includes('[WARN]')) span.classList.add('warn');
+      else if (line.includes('[DEBUG]')) span.classList.add('debug');
+      span.textContent = line;
+      el.appendChild(span);
+      el.appendChild(document.createTextNode('\n'));
+    }
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
+document.getElementById('btn-copy-log').addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'GET_LOGS' }, (resp) => {
+    if (!resp?.logs) return;
+    const text = resp.logs.join('\n');
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.getElementById('btn-copy-log');
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+    });
+  });
+});
+
+document.getElementById('btn-refresh-log').addEventListener('click', loadLogs);
+
+// ---------------------------------------------------------------------------
+// Bridge health
+// ---------------------------------------------------------------------------
+
 function checkBridge(showFeedback) {
   if (showFeedback) setFeedback('bridge-feedback', 'loading', 'Connecting to bridge...');
 
@@ -48,7 +79,10 @@ function checkBridge(showFeedback) {
   });
 }
 
-// Load sync status
+// ---------------------------------------------------------------------------
+// Sync status
+// ---------------------------------------------------------------------------
+
 function loadStatus() {
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (resp) => {
     if (!resp) return;
@@ -73,7 +107,10 @@ function loadStatus() {
   });
 }
 
-// Load config
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
 function loadConfig() {
   chrome.runtime.sendMessage({ type: 'GET_CONFIG' }, (config) => {
     if (!config) return;
@@ -84,7 +121,6 @@ function loadConfig() {
   });
 }
 
-// Save config
 document.getElementById('btn-save').addEventListener('click', () => {
   const config = {
     accessgrid: {
@@ -94,7 +130,6 @@ document.getElementById('btn-save').addEventListener('click', () => {
     },
   };
   chrome.runtime.sendMessage({ type: 'SAVE_CONFIG', config }, () => {
-    log('Configuration saved');
     setFeedback('bridge-feedback', 'ok', 'Configuration saved');
   });
 });
@@ -116,21 +151,18 @@ document.getElementById('btn-sync').addEventListener('click', () => {
   const btn = document.getElementById('btn-sync');
   btn.disabled = true;
   btn.textContent = 'Syncing...';
-  log('Starting manual sync...');
 
   chrome.runtime.sendMessage({ type: 'FORCE_SYNC' }, (resp) => {
     btn.disabled = false;
     btn.textContent = 'Run Sync Now';
-    if (resp?.result) {
-      log(`Done: +${resp.result.new} new, -${resp.result.deleted} del, ${resp.result.statusChanges} status, ${resp.result.fieldChanges} fields (${resp.result.duration}ms)`);
-    } else {
-      log('No result — check bridge connection');
-    }
     loadStatus();
   });
 });
 
-// Initialize
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+
 checkBridge(false);
 loadStatus();
 loadConfig();

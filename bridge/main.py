@@ -68,12 +68,17 @@ logger = logging.getLogger(__name__)
 
 
 class SettingsWindow:
-    """Tk settings window for configuring the bridge."""
+    """Tk settings window for configuring the bridge.
+
+    Only Plasec credentials are configured here — AccessGrid credentials
+    are configured in the Chrome extension popup (the extension calls
+    the AG API directly, the bridge never talks to AccessGrid).
+    """
 
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(f"Avigilon Bridge v{VERSION}")
-        self.root.geometry("560x820")
+        self.root.geometry("560x660")
         self.root.resizable(True, True)
 
         config = load_config()
@@ -113,28 +118,12 @@ class SettingsWindow:
 
         ttk.Button(main_frame, text="Test Plasec Connection", command=self._test_plasec).pack(anchor=tk.W, pady=(0, 16))
 
-        # --- AccessGrid section ---
-        ttk.Label(main_frame, text="AccessGrid", font=('', 13, 'bold')).pack(anchor=tk.W)
-        ttk.Separator(main_frame, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(2, 10))
-
-        ag = config.get('accessgrid', {})
-
-        ttk.Label(main_frame, text="Account ID:").pack(anchor=tk.W)
-        self.ag_account = ttk.Entry(main_frame, width=50)
-        self.ag_account.insert(0, ag.get('account_id', ''))
-        self.ag_account.pack(fill=tk.X, pady=(0, 8))
-
-        ttk.Label(main_frame, text="API Secret:").pack(anchor=tk.W)
-        self.ag_secret = ttk.Entry(main_frame, width=50, show='*')
-        self.ag_secret.insert(0, ag.get('api_secret', ''))
-        self.ag_secret.pack(fill=tk.X, pady=(0, 8))
-
-        ttk.Label(main_frame, text="Template ID:").pack(anchor=tk.W)
-        self.ag_template = ttk.Entry(main_frame, width=50)
-        self.ag_template.insert(0, ag.get('template_id', ''))
-        self.ag_template.pack(fill=tk.X, pady=(0, 8))
-
-        ttk.Button(main_frame, text="Test AccessGrid Credentials", command=self._test_accessgrid).pack(anchor=tk.W, pady=(0, 16))
+        # --- Info ---
+        ttk.Label(
+            main_frame,
+            text="AccessGrid credentials are configured in the Chrome extension popup.",
+            foreground='#6b7280', font=('', 11),
+        ).pack(anchor=tk.W, pady=(0, 12))
 
         # --- Auto-start ---
         self.autostart_var = tk.BooleanVar(value=is_autostart_enabled())
@@ -189,17 +178,11 @@ class SettingsWindow:
         logging.getLogger().addHandler(self._log_handler)
 
     def _save(self):
-        config = {
-            'plasec': {
-                'host': self.plasec_host.get().strip(),
-                'username': self.plasec_user.get().strip(),
-                'password': self.plasec_pass.get(),
-            },
-            'accessgrid': {
-                'account_id': self.ag_account.get().strip(),
-                'api_secret': self.ag_secret.get(),
-                'template_id': self.ag_template.get().strip(),
-            },
+        config = load_config()
+        config['plasec'] = {
+            'host': self.plasec_host.get().strip(),
+            'username': self.plasec_user.get().strip(),
+            'password': self.plasec_pass.get(),
         }
         save_config(config)
 
@@ -231,80 +214,6 @@ class SettingsWindow:
                 messagebox.showerror("Failed", "Could not connect. Check credentials and host.")
         except Exception as e:
             messagebox.showerror("Error", str(e))
-
-    def _test_accessgrid(self):
-        import hmac
-        import hashlib
-        import base64
-        import json as _json
-        import requests as req_lib
-
-        account_id = self.ag_account.get().strip()
-        api_secret = self.ag_secret.get()
-        template_id = self.ag_template.get().strip()
-
-        if not account_id or not api_secret:
-            messagebox.showwarning("Missing", "Fill in Account ID and API Secret first.")
-            return
-
-        try:
-            # Build the same HMAC signature the AccessGrid SDK uses
-            if template_id:
-                path = f'/v1/console/card-templates/{template_id}'
-                sig_payload = _json.dumps({'id': template_id})
-            else:
-                path = '/v1/key-cards?template_id=test'
-                sig_payload = _json.dumps({'id': 'test'})
-
-            encoded = base64.b64encode(sig_payload.encode()).decode()
-            signature = hmac.new(
-                api_secret.encode(), encoded.encode(), hashlib.sha256
-            ).hexdigest()
-
-            url = f'https://api.accessgrid.com{path}'
-            params = {}
-            if template_id:
-                params['sig_payload'] = sig_payload
-
-            resp = req_lib.get(
-                url,
-                params=params,
-                headers={
-                    'Content-Type': 'application/json',
-                    'X-ACCT-ID': account_id,
-                    'X-PAYLOAD-SIG': signature,
-                },
-                timeout=10,
-            )
-
-            if resp.status_code == 401:
-                messagebox.showerror(
-                    "Authentication Failed",
-                    "Invalid Account ID or API Secret.\n\nPlease check your AccessGrid credentials."
-                )
-            elif resp.status_code == 404 and template_id:
-                messagebox.showerror(
-                    "Template Not Found",
-                    f"Credentials are valid but template '{template_id}' was not found."
-                )
-            elif resp.status_code == 200:
-                data = resp.json()
-                if template_id:
-                    name = data.get('name', 'unknown')
-                    protocol = data.get('protocol', 'unknown')
-                    messagebox.showinfo(
-                        "Success",
-                        f"AccessGrid credentials valid!\n\nTemplate: {name}\nProtocol: {protocol}"
-                    )
-                else:
-                    messagebox.showinfo("Success", "AccessGrid credentials valid!")
-            else:
-                messagebox.showerror("Error", f"HTTP {resp.status_code}: {resp.text[:200]}")
-
-        except req_lib.RequestException as e:
-            messagebox.showerror("Error", f"Could not reach AccessGrid API:\n{e}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Unexpected error:\n{e}")
 
     def _copy_log(self):
         self.log_text.configure(state=tk.NORMAL)
