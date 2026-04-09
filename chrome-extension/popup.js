@@ -38,6 +38,7 @@ function loadLogs() {
       span.className = 'log-line';
       if (line.includes('[ERROR]')) span.classList.add('error');
       else if (line.includes('[WARN]')) span.classList.add('warn');
+      else if (line.includes('[HTTP]')) span.classList.add('http');
       else if (line.includes('[DEBUG]')) span.classList.add('debug');
       span.textContent = line;
       el.appendChild(span);

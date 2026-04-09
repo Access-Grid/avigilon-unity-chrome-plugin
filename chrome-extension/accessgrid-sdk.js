@@ -105,13 +105,29 @@ class BaseApi {
       }
     }
 
+    // Log request if hook is set
+    const shortPath = path.length > 80 ? path.substring(0, 80) + '...' : path;
+    if (this.onRequest) {
+      this.onRequest('req', method, shortPath, payload ? payload.substring(0, 200) : '');
+    }
+
+    const start = Date.now();
     const response = await fetch(finalUrl, {
       method,
       headers,
       body: method !== 'GET' ? payload : undefined,
     });
 
-    const data = await response.json();
+    const respText = await response.text();
+    const elapsed = Date.now() - start;
+
+    if (this.onRequest) {
+      const truncated = respText.length > 300 ? respText.substring(0, 300) + '...' : respText;
+      this.onRequest('resp', response.status, shortPath, truncated, elapsed);
+    }
+
+    let data;
+    try { data = JSON.parse(respText); } catch { data = {}; }
 
     if (!response.ok) {
       if (response.status === 401) throw new AuthenticationError();

@@ -83,7 +83,20 @@ async function getAGClient() {
   const config = await getConfig();
   const ag = config.accessgrid || {};
   if (!ag.account_id || !ag.api_secret) return null;
-  return new AccessGrid(ag.account_id, ag.api_secret);
+  const client = new AccessGrid(ag.account_id, ag.api_secret);
+
+  // Wire HTTP logging into both API sub-clients
+  const httpLogger = (dir, statusOrMethod, path, body, elapsed) => {
+    if (dir === 'req') {
+      log('HTTP', `→ AG ${statusOrMethod} ${path}${body ? ` body=${body}` : ''}`);
+    } else {
+      log('HTTP', `← AG ${statusOrMethod} ${path} (${elapsed}ms) ${body}`);
+    }
+  };
+  client.accessCards.onRequest = httpLogger;
+  client.console.onRequest = httpLogger;
+
+  return client;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,15 +105,34 @@ async function getAGClient() {
 
 async function bridgeFetch(path, options = {}) {
   const url = `${BRIDGE_URL}${path}`;
+  const method = options.method || 'GET';
+  const bodyStr = options.body || '';
+
+  log('HTTP', `→ ${method} ${path}${bodyStr ? ` body=${bodyStr.substring(0, 200)}` : ''}`);
+
+  const start = Date.now();
   const resp = await fetch(url, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
   });
+
+  const elapsed = Date.now() - start;
+  const respText = await resp.text();
+  const truncated = respText.length > 300 ? respText.substring(0, 300) + '...' : respText;
+
+  log('HTTP', `← ${resp.status} ${path} (${elapsed}ms) ${truncated}`);
+
   if (!resp.ok && resp.status !== 502) {
-    const body = await resp.json().catch(() => ({}));
-    throw new Error(body.error || `Bridge HTTP ${resp.status}`);
+    let errMsg;
+    try { errMsg = JSON.parse(respText).error; } catch { errMsg = null; }
+    throw new Error(errMsg || `Bridge HTTP ${resp.status}`);
   }
-  return resp.json();
+
+  try {
+    return JSON.parse(respText);
+  } catch {
+    throw new Error(`Invalid JSON from bridge: ${respText.substring(0, 100)}`);
+  }
 }
 
 async function isBridgeHealthy() {
