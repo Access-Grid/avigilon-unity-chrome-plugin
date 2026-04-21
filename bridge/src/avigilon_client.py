@@ -281,18 +281,10 @@ class AvigilonClient:
         return []
 
     def get_identities_xml(self) -> List[Dict]:
-        """Fetch identities via XML search endpoint."""
-        resp = self._request(
-            'GET', '/identities.xml',
-            params={
-                'identity_search_exec_search': 'true',
-                'adv_search_exec_search': 'true',
-                'quick_search': 'true',
-                'qck_search_and_or': '&',
-            },
-            headers={'X-CSRF-Token': self.csrf_token, 'X-Requested-With': 'XMLHttpRequest'},
-        )
+        """Fetch identities via XML endpoint."""
+        resp = self._request('GET', '/identities.xml')
         if resp.status_code != 200:
+            logger.error(f"get_identities_xml: HTTP {resp.status_code}")
             return []
         try:
             return self._parse_identities_xml(resp.text)
@@ -427,16 +419,7 @@ class AvigilonClient:
 
             probe_path = '/identities.xml'
             logger.info(f"test_connection: probing GET {self.base_url}{probe_path}")
-            resp = self._request(
-                'GET', probe_path,
-                params={
-                    'identity_search_exec_search': 'true',
-                    'adv_search_exec_search': 'true',
-                    'quick_search': 'true',
-                    'qck_search_and_or': '&',
-                },
-                headers={'X-CSRF-Token': self.csrf_token, 'X-Requested-With': 'XMLHttpRequest'},
-            )
+            resp = self._request('GET', probe_path)
             logger.info(
                 f"test_connection: probe response status={resp.status_code} "
                 f"final_url={resp.url} elapsed={resp.elapsed.total_seconds():.2f}s"
