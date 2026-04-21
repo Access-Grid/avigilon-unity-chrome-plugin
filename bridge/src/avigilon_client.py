@@ -51,29 +51,105 @@ class AvigilonClient:
         if not verify_ssl:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+        logger.info(
+            f"AvigilonClient init: base_url={self.base_url} "
+            f"username={self.username!r} verify_ssl={self.verify_ssl} "
+            f"timeout={HTTP_TIMEOUT}s user_agent={HTTP_USER_AGENT!r}"
+        )
+
     @property
     def csrf_token(self) -> str:
         return self.session.cookies.get('XSRF-TOKEN', '')
 
     def login(self) -> bool:
+        login_url = f"{self.base_url}/sessions"
+        logger.info(f"Avigilon login: POST {login_url} (user={self.username!r}, verify_ssl={self.verify_ssl})")
         try:
             resp = self.session.post(
-                f"{self.base_url}/sessions",
+                login_url,
                 data={'login': self.username, 'password': self.password},
                 allow_redirects=True,
                 verify=self.verify_ssl,
                 timeout=HTTP_TIMEOUT,
             )
+            logger.info(
+                f"Avigilon login response: status={resp.status_code} "
+                f"final_url={resp.url} elapsed={resp.elapsed.total_seconds():.2f}s "
+                f"redirects={len(resp.history)}"
+            )
+            if resp.history:
+                for i, hop in enumerate(resp.history):
+                    logger.debug(
+                        f"  redirect [{i}]: {hop.status_code} {hop.url} -> "
+                        f"Location: {hop.headers.get('Location', '')}"
+                    )
+            logger.debug(f"Avigilon login response headers: {dict(resp.headers)}")
+            cookie_names = [c.name for c in self.session.cookies]
+            logger.info(f"Avigilon login cookies set: {cookie_names}")
+            body_preview = (resp.text or '')[:500].replace('\n', ' ')
+            logger.debug(f"Avigilon login body (first 500 chars): {body_preview!r}")
+
             if self.session.cookies.get('_session_id'):
                 self._logged_in = True
-                logger.info("Logged in to Avigilon")
+                logger.info(
+                    f"Avigilon login SUCCESS: _session_id cookie present, "
+                    f"XSRF-TOKEN={'set' if self.csrf_token else 'missing'}"
+                )
                 return True
             if resp.status_code == 404:
-                logger.error(f"Avigilon login: 404 — verify {self.base_url} is correct")
+                logger.error(
+                    f"Avigilon login FAILED: 404 Not Found at {login_url} — "
+                    f"verify the host/IP is correct and that the Avigilon Unity "
+                    f"web server is actually listening on HTTPS at this address"
+                )
+            elif resp.status_code in (401, 403):
+                logger.error(
+                    f"Avigilon login FAILED: HTTP {resp.status_code} — "
+                    f"credentials rejected by server"
+                )
+            elif resp.status_code >= 500:
+                logger.error(
+                    f"Avigilon login FAILED: HTTP {resp.status_code} — "
+                    f"server-side error at {login_url}"
+                )
             else:
-                logger.error(f"Avigilon login: no session cookie (status {resp.status_code})")
+                logger.error(
+                    f"Avigilon login FAILED: status={resp.status_code} but no "
+                    f"_session_id cookie was set. Cookies received: {cookie_names}. "
+                    f"Final URL: {resp.url}"
+                )
+        except requests.exceptions.SSLError as e:
+            logger.error(
+                f"Avigilon login FAILED: SSL error talking to {login_url}: {e}. "
+                f"(verify_ssl={self.verify_ssl}; if this is a self-signed cert, "
+                f"SSL bypass should be on)"
+            )
+        except requests.exceptions.ConnectTimeout as e:
+            logger.error(
+                f"Avigilon login FAILED: connection timed out after {HTTP_TIMEOUT}s "
+                f"connecting to {login_url}: {e}. Host may be unreachable or firewalled."
+            )
+        except requests.exceptions.ReadTimeout as e:
+            logger.error(
+                f"Avigilon login FAILED: read timed out after {HTTP_TIMEOUT}s "
+                f"waiting for {login_url}: {e}. Host accepted the connection but "
+                f"did not respond in time."
+            )
+        except requests.exceptions.ConnectionError as e:
+            logger.error(
+                f"Avigilon login FAILED: connection error to {login_url}: "
+                f"{type(e).__name__}: {e}. Check that the host is reachable "
+                f"(DNS, network, firewall, port 443)."
+            )
         except requests.RequestException as e:
-            logger.error(f"Avigilon login failed: {e}")
+            logger.error(
+                f"Avigilon login FAILED: {type(e).__name__}: {e} "
+                f"(url={login_url})"
+            )
+        except Exception as e:
+            logger.exception(
+                f"Avigilon login FAILED: unexpected {type(e).__name__}: {e}"
+            )
         return False
 
     def _ensure_authenticated(self):
@@ -346,17 +422,41 @@ class AvigilonClient:
         return []
 
     def test_connection(self) -> bool:
+        logger.info(f"test_connection: starting (base_url={self.base_url})")
         try:
-            if not self._logged_in and not self.login():
-                return False
+            if not self._logged_in:
+                logger.info("test_connection: not logged in yet, attempting login()")
+                if not self.login():
+                    logger.error("test_connection: login() returned False — aborting")
+                    return False
+            else:
+                logger.info("test_connection: session already authenticated, skipping login()")
+
+            probe_path = '/identities.json'
+            logger.info(f"test_connection: probing GET {self.base_url}{probe_path}?page=1&perpage=1")
             resp = self._request(
-                'GET', '/identities.json',
+                'GET', probe_path,
                 params={'page': 1, 'perpage': 1},
                 headers={'Accept': 'application/json'},
             )
-            return resp.status_code == 200
+            logger.info(
+                f"test_connection: probe response status={resp.status_code} "
+                f"final_url={resp.url} elapsed={resp.elapsed.total_seconds():.2f}s"
+            )
+            logger.debug(f"test_connection: probe response headers: {dict(resp.headers)}")
+            body_preview = (resp.text or '')[:500].replace('\n', ' ')
+            logger.debug(f"test_connection: probe body (first 500 chars): {body_preview!r}")
+
+            if resp.status_code == 200:
+                logger.info("test_connection: SUCCESS (probe returned 200)")
+                return True
+            logger.error(
+                f"test_connection: FAILED — probe returned HTTP {resp.status_code} "
+                f"(expected 200). Final URL: {resp.url}"
+            )
+            return False
         except Exception as e:
-            logger.error(f"Connection test failed: {e}")
+            logger.exception(f"test_connection: EXCEPTION {type(e).__name__}: {e}")
             return False
 
     # ------------------------------------------------------------------

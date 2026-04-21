@@ -57,13 +57,16 @@ class TkLogHandler(logging.Handler):
 log_format = '%(asctime)s [%(name)s] %(levelname)s: %(message)s'
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format=log_format,
     handlers=[
         logging.StreamHandler(),
         logging.FileHandler(LOG_FILE, encoding='utf-8'),
     ],
 )
+# Quiet noisy third-party loggers; we want our own verbose output front and center.
+logging.getLogger('urllib3').setLevel(logging.INFO)
+logging.getLogger('PIL').setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -202,18 +205,32 @@ class SettingsWindow:
         host = self.avigilon_host.get().strip()
         user = self.avigilon_user.get().strip()
         pwd = self.avigilon_pass.get()
+        logger.info("=" * 60)
+        logger.info("Test Avigilon Connection requested from settings window")
+        logger.info(f"  host     = {host!r}")
+        logger.info(f"  username = {user!r}")
+        logger.info(f"  password = {'<set, ' + str(len(pwd)) + ' chars>' if pwd else '<empty>'}")
+        logger.info("=" * 60)
         if not host or not user or not pwd:
+            logger.warning("Test aborted: missing host, username, or password")
             messagebox.showwarning("Missing", "Fill in host, username, and password first.")
             return
         try:
             client = AvigilonClient(host, user, pwd)
             ok = client.test_connection()
             if ok:
+                logger.info("Test Avigilon Connection: SUCCESS")
                 messagebox.showinfo("Success", "Connected to Avigilon successfully!")
             else:
-                messagebox.showerror("Failed", "Could not connect. Check credentials and host.")
+                logger.error("Test Avigilon Connection: FAILED (see log above for details)")
+                messagebox.showerror(
+                    "Failed",
+                    "Could not connect. Check credentials and host.\n\n"
+                    "See the Log panel below for details.",
+                )
         except Exception as e:
-            messagebox.showerror("Error", str(e))
+            logger.exception(f"Test Avigilon Connection: EXCEPTION {type(e).__name__}: {e}")
+            messagebox.showerror("Error", f"{type(e).__name__}: {e}")
 
     def _copy_log(self):
         self.log_text.configure(state=tk.NORMAL)
