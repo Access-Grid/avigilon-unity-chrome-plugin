@@ -48,6 +48,10 @@ class AvigilonClient:
         self.session.headers.update({'User-Agent': HTTP_USER_AGENT})
         self._logged_in = False
         self._csrf_meta_token = ''
+        # Some Avigilon Unity deployments use "plasec" element/field names
+        # (the product's legacy brand), others use "avigilon". Detected from
+        # login HTML and XML responses; defaults to avigilon.
+        self._prefix = 'avigilon'
 
         if not verify_ssl:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -74,47 +78,68 @@ class AvigilonClient:
         )
         return m.group(1) if m else ''
 
+    def _detect_prefix_from_text(self, text: str) -> None:
+        """Sniff plasec vs avigilon field-prefix from an HTML/JSON/XML body.
+
+        Looks for field names specific enough that a false positive is
+        unlikely (Fname/Lname/Idstatus). First match wins; plasec is checked
+        first because newer deployments have rebranded to avigilon and
+        legacy-branded ones are the ones that need detection.
+        """
+        if not text:
+            return
+        signals = ('Fname', 'Lname', 'Idstatus', 'identityEmailaddress')
+        for prefix in ('plasec', 'avigilon'):
+            for sig in signals:
+                if f'{prefix}{sig}' in text:
+                    if self._prefix != prefix:
+                        logger.info(f"Detected Avigilon field prefix: {prefix!r}")
+                    self._prefix = prefix
+                    return
+
     def login(self) -> bool:
         login_url = f"{self.base_url}/sessions"
-        logger.info(f"Avigilon login: POST {login_url} (user={self.username!r}, verify_ssl={self.verify_ssl})")
+        logger.info(f"Avigilon login: POST {login_url} (user={self.username!r}, verify_ssl={self.verify_ssl}, body=json)")
         try:
             resp = self.session.post(
                 login_url,
-                data={'login': self.username, 'password': self.password},
-                allow_redirects=True,
+                json={'login': self.username, 'password': self.password},
+                headers={
+                    'Accept': 'application/json, text/javascript, */*; q=0.01',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Origin': self.base_url,
+                    'Referer': f'{self.base_url}/sessions/new',
+                },
+                allow_redirects=False,
                 verify=self.verify_ssl,
                 timeout=HTTP_TIMEOUT,
             )
             logger.info(
                 f"Avigilon login response: status={resp.status_code} "
-                f"final_url={resp.url} elapsed={resp.elapsed.total_seconds():.2f}s "
-                f"redirects={len(resp.history)}"
+                f"url={resp.url} elapsed={resp.elapsed.total_seconds():.2f}s"
             )
-            if resp.history:
-                for i, hop in enumerate(resp.history):
-                    logger.debug(
-                        f"  redirect [{i}]: {hop.status_code} {hop.url} -> "
-                        f"Location: {hop.headers.get('Location', '')}"
-                    )
             logger.debug(f"Avigilon login response headers: {dict(resp.headers)}")
             cookie_names = [c.name for c in self.session.cookies]
             logger.info(f"Avigilon login cookies set: {cookie_names}")
             body_preview = (resp.text or '')[:500].replace('\n', ' ')
             logger.debug(f"Avigilon login body (first 500 chars): {body_preview!r}")
 
-            if self.session.cookies.get('_session_id'):
+            if resp.status_code == 200 and self.session.cookies.get('_session_id'):
                 self._logged_in = True
-                self._csrf_meta_token = self._extract_csrf_meta(resp.text)
+                self._detect_prefix_from_text(resp.text)
+                # JSON login response has no CSRF meta tag. Fetch the
+                # dashboard HTML to pick up both CSRF and confirm the prefix.
+                self._fetch_dashboard_state()
                 cookie_csrf = self.session.cookies.get('XSRF-TOKEN', '')
                 logger.info(
                     f"Avigilon login SUCCESS: _session_id cookie present, "
                     f"csrf from meta={'set' if self._csrf_meta_token else 'missing'}, "
-                    f"csrf from cookie={'set' if cookie_csrf else 'missing'}"
+                    f"csrf from cookie={'set' if cookie_csrf else 'missing'}, "
+                    f"field prefix={self._prefix!r}"
                 )
                 if not self._csrf_meta_token and not cookie_csrf:
                     logger.warning(
-                        "No CSRF token found in login response (neither HTML meta "
-                        "tag nor XSRF-TOKEN cookie). Write operations may be rejected."
+                        "No CSRF token found after login. Write operations may be rejected."
                     )
                 return True
             if resp.status_code == 404:
@@ -172,6 +197,31 @@ class AvigilonClient:
                 f"Avigilon login FAILED: unexpected {type(e).__name__}: {e}"
             )
         return False
+
+    def _fetch_dashboard_state(self) -> None:
+        """Fetch `/` after login to scrape CSRF meta and confirm field prefix.
+
+        JSON login sets `_session_id` but doesn't return HTML, so there's no
+        CSRF meta tag in its response. The dashboard HTML has one.
+        """
+        try:
+            resp = self.session.get(
+                f"{self.base_url}/",
+                headers={'Accept': 'text/html,application/xhtml+xml'},
+                allow_redirects=True,
+                verify=self.verify_ssl,
+                timeout=HTTP_TIMEOUT,
+            )
+            logger.debug(
+                f"Dashboard fetch: status={resp.status_code} "
+                f"content_length={len(resp.content)}"
+            )
+            csrf = self._extract_csrf_meta(resp.text)
+            if csrf:
+                self._csrf_meta_token = csrf
+            self._detect_prefix_from_text(resp.text)
+        except Exception as e:
+            logger.warning(f"Dashboard state fetch failed: {e} (writes may still work)")
 
     def _ensure_authenticated(self):
         if not self._logged_in:
@@ -283,28 +333,36 @@ class AvigilonClient:
     def get_identities_xml(self) -> List[Dict]:
         """Fetch identities via XML endpoint.
 
-        The controller only populates @identities when a search runs, so
-        we mirror the search params the Avigilon UI sends. Empty lnam/fnam
-        plus letter_search=true attempts a "show all" search; if the server
-        requires a letter filter, caller can loop A-Z instead.
+        The controller only populates @identities when a search runs, so we
+        mirror the full param set the Avigilon UI sends for "no filter"
+        (empty lnam/fnam, empty adv_search_val_0). If any adv_search_* field
+        is omitted the controller 500s.
         """
         resp = self._request(
             'GET', '/identities.xml',
             params={
+                'identity_search_exec_search': 'true',
+                'adv_search_field_0': '',
+                'adv_search_udf_0': '',
+                'adv_search_val_0': '',
+                'search_pattern_0': '2',
+                'adv_search_and_or': '&',
+                'adv_search_cnt': '0',
+                'adv_search_exec_search': 'true',
                 'quick_search': 'true',
+                'qck_search_and_or': '&',
                 'lnam': '',
                 'fnam': '',
                 'tkn': '',
-                'qck_search_and_or': '&',
                 'search_pattern_fnam': '2',
                 'search_pattern_lnam': '2',
                 'group_id': '',
-                'letter_search': 'true',
+                'id': '',
             },
             headers={
                 'X-CSRF-Token': self.csrf_token,
                 'X-Requested-With': 'XMLHttpRequest',
-                'Accept': 'application/xml, */*',
+                'Accept': '*/*',
                 'Referer': f'{self.base_url}/identities',
             },
         )
@@ -326,21 +384,25 @@ class AvigilonClient:
         return []
 
     def create_identity(self, data: Dict) -> Optional[str]:
+        p = self._prefix
         form = {
             'utf8': '\u2713',
             'authenticity_token': self.csrf_token,
-            'identity[avigilonLname]': data.get('last_name', ''),
-            'identity[avigilonFname]': data.get('first_name', ''),
-            'identity[avigilonidentityEmailaddress]': data.get('email', ''),
-            'identity[avigilonidentityPhone]': data.get('phone', ''),
-            'identity[avigilonidentityWorkphone]': data.get('work_phone', ''),
-            'identity[avigilonidentityTitle]': data.get('title', ''),
-            'identity[avigilonidentityDepartment]': data.get('department', ''),
-            'identity[avigilonIdstatus]': '1',
-            'identity[avigilonidentityPagetimeout]': '600000',
-            'identity[avigilonidentityForcedPasswordChange]': 'TRUE',
+            f'identity[{p}Lname]': data.get('last_name', ''),
+            f'identity[{p}Fname]': data.get('first_name', ''),
+            f'identity[{p}identityEmailaddress]': data.get('email', ''),
+            f'identity[{p}identityPhone]': data.get('phone', ''),
+            f'identity[{p}identityWorkphone]': data.get('work_phone', ''),
+            f'identity[{p}identityTitle]': data.get('title', ''),
+            f'identity[{p}identityDepartment]': data.get('department', ''),
+            f'identity[{p}Idstatus]': '1',
+            f'identity[{p}identityPagetimeout]': '600000',
+            f'identity[{p}identityForcedPasswordChange]': 'TRUE',
         }
-        resp = self._request('POST', '/identities', data=form, allow_redirects=False)
+        resp = self._request(
+            'POST', '/identities', data=form, allow_redirects=False,
+            headers={'Referer': f'{self.base_url}/identities/new'},
+        )
         location = resp.headers.get('Location', '')
         if resp.status_code == 302 and location:
             m = re.search(r'/identities/([a-f0-9]+)', location)
@@ -350,28 +412,30 @@ class AvigilonClient:
         return None
 
     def create_token(self, identity_id: str, token_data: Dict) -> Optional[str]:
+        p = self._prefix
         form = {
             'utf8': '\u2713',
             'authenticity_token': self.csrf_token,
-            'token[avigilonInternalnumber]': token_data.get('internal_number', ''),
-            'token[avigilonEmbossednumber]': token_data.get('embossed_number', ''),
-            'token[avigilonPIN]': token_data.get('pin', ''),
-            'token[avigilonTokenType]': token_data.get('token_type', AVIGILON_TOKEN_TYPE_STANDARD),
-            'token[avigilonTokenlevel]': token_data.get('level', '0'),
-            'token[avigilonTokenstatus]': token_data.get('status', AVIGILON_TOKEN_STATUS_ACTIVE),
-            'token[avigilonDownload]': 'TRUE',
-            'token[avigilonTokenMobileAppType]': '0',
-            'token[avigilonTokenOrigoMobileIdType]': '0',
-            'token[avigilonTokenUnitofUpdatePeriod]': '0',
-            'token[avigilonTokennoexpire]': 'FALSE',
-            'avigilonIssuedate': token_data.get('issue_date', ''),
-            'avigilonActivatedate': token_data.get('activate_date', ''),
-            'avigilonDeactivatedate': token_data.get('deactivate_date', ''),
+            f'token[{p}Internalnumber]': token_data.get('internal_number', ''),
+            f'token[{p}Embossednumber]': token_data.get('embossed_number', ''),
+            f'token[{p}PIN]': token_data.get('pin', ''),
+            f'token[{p}TokenType]': token_data.get('token_type', AVIGILON_TOKEN_TYPE_STANDARD),
+            f'token[{p}Tokenlevel]': token_data.get('level', '0'),
+            f'token[{p}Tokenstatus]': token_data.get('status', AVIGILON_TOKEN_STATUS_ACTIVE),
+            f'token[{p}Download]': 'TRUE',
+            f'token[{p}TokenMobileAppType]': '0',
+            f'token[{p}TokenOrigoMobileIdType]': '0',
+            f'token[{p}TokenUnitofUpdatePeriod]': '0',
+            f'token[{p}Tokennoexpire]': 'FALSE',
+            f'{p}Issuedate': token_data.get('issue_date', ''),
+            f'{p}Activatedate': token_data.get('activate_date', ''),
+            f'{p}Deactivatedate': token_data.get('deactivate_date', ''),
             'enrollVirdiAfter': 'false',
         }
         resp = self._request(
             'POST', f'/identities/{identity_id}/tokens',
             data=form, allow_redirects=False,
+            headers={'Referer': f'{self.base_url}/identities/{identity_id}/tokens/new'},
         )
         location = resp.headers.get('Location', '')
         if resp.status_code == 302 and location:
@@ -385,30 +449,32 @@ class AvigilonClient:
         self, identity_id: str, token_id: str,
         avigilon_status: str, current_token_data: Optional[Dict] = None,
     ) -> bool:
+        p = self._prefix
         td = current_token_data or {}
         form = {
             'utf8': '\u2713',
             '_method': 'put',
             'authenticity_token': self.csrf_token,
-            'token[avigilonTokenstatus]': avigilon_status,
-            'token[avigilonInternalnumber]': td.get('internal_number', ''),
-            'token[avigilonEmbossednumber]': td.get('embossed_number', ''),
-            'token[avigilonPIN]': td.get('pin', ''),
-            'token[avigilonTokenType]': td.get('token_type', '0'),
-            'token[avigilonTokenlevel]': td.get('level', '0'),
-            'token[avigilonTokenMobileAppType]': '0',
-            'token[avigilonTokenOrigoMobileIdType]': '0',
-            'token[avigilonDownload]': 'TRUE',
-            'token[avigilonTokenUnitofUpdatePeriod]': '0',
-            'token[avigilonTokennoexpire]': 'FALSE',
-            'avigilonIssuedate': td.get('issue_date', ''),
-            'avigilonActivatedate': td.get('activate_date', ''),
-            'avigilonDeactivatedate': td.get('deactivate_date', ''),
+            f'token[{p}Tokenstatus]': avigilon_status,
+            f'token[{p}Internalnumber]': td.get('internal_number', ''),
+            f'token[{p}Embossednumber]': td.get('embossed_number', ''),
+            f'token[{p}PIN]': td.get('pin', ''),
+            f'token[{p}TokenType]': td.get('token_type', '0'),
+            f'token[{p}Tokenlevel]': td.get('level', '0'),
+            f'token[{p}TokenMobileAppType]': '0',
+            f'token[{p}TokenOrigoMobileIdType]': '0',
+            f'token[{p}Download]': 'TRUE',
+            f'token[{p}TokenUnitofUpdatePeriod]': '0',
+            f'token[{p}Tokennoexpire]': 'FALSE',
+            f'{p}Issuedate': td.get('issue_date', ''),
+            f'{p}Activatedate': td.get('activate_date', ''),
+            f'{p}Deactivatedate': td.get('deactivate_date', ''),
             'enrollVirdiAfter': 'false',
         }
         resp = self._request(
             'POST', f'/identities/{identity_id}/tokens/{token_id}',
             data=form, allow_redirects=False,
+            headers={'Referer': f'{self.base_url}/identities/{identity_id}/tokens/{token_id}/edit'},
         )
         return resp.status_code == 302
 
@@ -420,6 +486,7 @@ class AvigilonClient:
         resp = self._request(
             'POST', f'/identities/{identity_id}/tokens/{token_id}',
             data=form, allow_redirects=False,
+            headers={'Referer': f'{self.base_url}/identities/{identity_id}/tokens'},
         )
         return resp.status_code == 302
 
@@ -485,12 +552,24 @@ class AvigilonClient:
         for prefix in self._XML_PREFIXES:
             found = elem.find(f'{prefix}{suffix}')
             if found is not None:
+                if self._prefix != prefix:
+                    logger.info(f"Detected Avigilon field prefix from XML: {prefix!r}")
+                    self._prefix = prefix
                 return found
         return None
 
     def _prefixed_text(self, elem, suffix: str) -> str:
         found = self._find_prefixed(elem, suffix)
         return found.text if found is not None and found.text else ''
+
+    @classmethod
+    def _prefixed_get(cls, d: Dict, suffix: str, default=''):
+        """Look up dict keys with either avigilon<suffix> or plasec<suffix>."""
+        for prefix in cls._XML_PREFIXES:
+            val = d.get(f'{prefix}{suffix}')
+            if val not in (None, ''):
+                return val
+        return default
 
     def _parse_identities_xml(self, xml_text: str) -> List[Dict]:
         """Parse XML identity list into normalized dicts."""
@@ -565,47 +644,25 @@ class AvigilonClient:
             fmt_id = raw.get('cn', '') or raw.get('id', '')
         return {
             'id': str(fmt_id),
-            'name': str(attrs.get('avigilonName', '') or ''),
-            'facility_code': str(attrs.get('avigiloncfmtFacilitycode', '') or ''),
-            'total_bits': str(attrs.get('avigiloncfmtMaxdigits', '') or ''),
-            'fc_bits': str(attrs.get('avigiloncfmtFcodelen', '') or ''),
-            'cn_bits': str(attrs.get('avigiloncfmtCardlen', '') or ''),
-            'format_type': str(attrs.get('avigiloncfmtType', '') or ''),
+            'name': str(self._prefixed_get(attrs, 'Name') or ''),
+            'facility_code': str(self._prefixed_get(attrs, 'cfmtFacilitycode') or ''),
+            'total_bits': str(self._prefixed_get(attrs, 'cfmtMaxdigits') or ''),
+            'fc_bits': str(self._prefixed_get(attrs, 'cfmtFcodelen') or ''),
+            'cn_bits': str(self._prefixed_get(attrs, 'cfmtCardlen') or ''),
+            'format_type': str(self._prefixed_get(attrs, 'cfmtType') or ''),
         }
 
     def _normalize_identity(self, raw: Dict) -> Dict:
         if 'attributes' in raw:
             attrs = raw.get('attributes', {})
             identity_id = raw.get('id', '') or attrs.get('cn', '')
-            first_name = attrs.get('avigilonFname', '') or ''
-            last_name = attrs.get('avigilonLname', '') or ''
-            avigilon_name = attrs.get('avigilonName', '') or ''
+        else:
+            attrs = raw
+            identity_id = raw.get('cn', '') or raw.get('id', '')
 
-            if not first_name and not last_name and avigilon_name:
-                parts = [p.strip() for p in avigilon_name.split(',')]
-                last_name = parts[0] if parts else ''
-                first_name = parts[1] if len(parts) > 1 else ''
-
-            full_name = f"{first_name} {last_name}".strip() or avigilon_name
-            raw_status = str(attrs.get('avigilonIdstatus', '') or '')
-
-            return {
-                'id': identity_id,
-                'first_name': first_name,
-                'last_name': last_name,
-                'full_name': full_name,
-                'email': attrs.get('avigilonidentityEmailaddress', '') or '',
-                'phone': attrs.get('avigilonidentityPhone', '') or '',
-                'work_phone': attrs.get('avigilonidentityWorkphone', '') or '',
-                'status': self._normalize_identity_status(raw_status),
-                'title': attrs.get('avigilonidentityTitle', '') or '',
-                'department': attrs.get('avigilonidentityDepartment', '') or '',
-            }
-
-        identity_id = raw.get('cn', '') or raw.get('id', '')
-        first_name = raw.get('avigilonFname', '') or ''
-        last_name = raw.get('avigilonLname', '') or ''
-        avigilon_name = raw.get('avigilonName', '') or ''
+        first_name = str(self._prefixed_get(attrs, 'Fname') or '')
+        last_name = str(self._prefixed_get(attrs, 'Lname') or '')
+        avigilon_name = str(self._prefixed_get(attrs, 'Name') or '')
 
         if not first_name and not last_name and avigilon_name:
             parts = [p.strip() for p in avigilon_name.split(',')]
@@ -613,19 +670,23 @@ class AvigilonClient:
             first_name = parts[1] if len(parts) > 1 else ''
 
         full_name = f"{first_name} {last_name}".strip() or avigilon_name
-        raw_status = str(raw.get('avigilonIdstatus', '') or raw.get('status', ''))
+        raw_status = str(
+            self._prefixed_get(attrs, 'Idstatus')
+            or attrs.get('status', '')
+            or ''
+        )
 
         return {
             'id': identity_id,
             'first_name': first_name,
             'last_name': last_name,
             'full_name': full_name,
-            'email': raw.get('avigilonidentityEmailaddress', '') or '',
-            'phone': raw.get('avigilonidentityPhone', '') or '',
-            'work_phone': raw.get('avigilonidentityWorkphone', '') or '',
+            'email': str(self._prefixed_get(attrs, 'identityEmailaddress') or ''),
+            'phone': str(self._prefixed_get(attrs, 'identityPhone') or ''),
+            'work_phone': str(self._prefixed_get(attrs, 'identityWorkphone') or ''),
             'status': self._normalize_identity_status(raw_status),
-            'title': raw.get('avigilonidentityTitle', '') or '',
-            'department': raw.get('avigilonidentityDepartment', '') or '',
+            'title': str(self._prefixed_get(attrs, 'identityTitle') or ''),
+            'department': str(self._prefixed_get(attrs, 'identityDepartment') or ''),
         }
 
     _TOKEN_STATUS_MAP = {
@@ -647,45 +708,40 @@ class AvigilonClient:
     def _normalize_token(self, raw: Dict, identity_id: str = '') -> Dict:
         if 'attributes' in raw:
             attrs = raw.get('attributes', {})
-            ext = attrs.get('extended_attributes', {})
+            token_id = raw.get('id', '') or attrs.get('cn', '')
+        else:
+            attrs = raw
+            token_id = raw.get('cn', '') or raw.get('id', '')
 
-            if ext:
-                raw_status = str(ext.get('token_status', '') or '').lower()
-                status = self._TOKEN_STATUS_MAP.get(raw_status, '1')
-                issue_date = ext.get('formatted_issue_date', '') or ''
-                activate_date = ext.get('formatted_activate_date', '') or ''
-                deactivate_date = ext.get('formatted_deactivate_date', '') or ''
-            else:
-                raw_status = str(attrs.get('avigilonTokenstatus', '1') or '1')
-                status = self._normalize_identity_status(raw_status)
-                issue_date = attrs.get('avigilonIssuedate', '') or ''
-                activate_date = attrs.get('avigilonActivatedate', '') or ''
-                deactivate_date = attrs.get('avigilonDeactivatedate', '') or ''
+        ext = attrs.get('extended_attributes', {}) if isinstance(attrs, dict) else {}
 
-            return {
-                'id': raw.get('id', '') or attrs.get('cn', ''),
-                'identity_id': identity_id,
-                'internal_number': str(attrs.get('avigilonInternalnumber', '') or ''),
-                'embossed_number': str(attrs.get('avigilonEmbossednumber', '') or ''),
-                'pin': str(attrs.get('avigilonPIN', '') or ''),
-                'status': status,
-                'token_type': str(attrs.get('TokenTypeId') or attrs.get('avigilonTokenType', '0') or '0'),
-                'level': str(attrs.get('avigilonTokenlevel', '0') or '0'),
-                'issue_date': issue_date,
-                'activate_date': activate_date,
-                'deactivate_date': deactivate_date,
-            }
+        if ext:
+            raw_status = str(ext.get('token_status', '') or '').lower()
+            status = self._TOKEN_STATUS_MAP.get(raw_status, '1')
+            issue_date = ext.get('formatted_issue_date', '') or ''
+            activate_date = ext.get('formatted_activate_date', '') or ''
+            deactivate_date = ext.get('formatted_deactivate_date', '') or ''
+        else:
+            raw_status = str(self._prefixed_get(attrs, 'Tokenstatus') or '1')
+            status = self._normalize_identity_status(raw_status)
+            issue_date = str(self._prefixed_get(attrs, 'Issuedate') or '')
+            activate_date = str(self._prefixed_get(attrs, 'Activatedate') or '')
+            deactivate_date = str(self._prefixed_get(attrs, 'Deactivatedate') or '')
 
         return {
-            'id': raw.get('cn', '') or raw.get('id', ''),
+            'id': token_id,
             'identity_id': identity_id,
-            'internal_number': str(raw.get('avigilonInternalnumber', '') or ''),
-            'embossed_number': str(raw.get('avigilonEmbossednumber', '') or ''),
-            'pin': str(raw.get('avigilonPIN', '') or ''),
-            'status': str(raw.get('avigilonTokenstatus', '1') or '1'),
-            'token_type': str(raw.get('avigilonTokenType', '0') or '0'),
-            'level': str(raw.get('avigilonTokenlevel', '0') or '0'),
-            'issue_date': raw.get('avigilonIssuedate', '') or '',
-            'activate_date': raw.get('avigilonActivatedate', '') or '',
-            'deactivate_date': raw.get('avigilonDeactivatedate', '') or '',
+            'internal_number': str(self._prefixed_get(attrs, 'Internalnumber') or ''),
+            'embossed_number': str(self._prefixed_get(attrs, 'Embossednumber') or ''),
+            'pin': str(self._prefixed_get(attrs, 'PIN') or ''),
+            'status': status,
+            'token_type': str(
+                attrs.get('TokenTypeId')
+                or self._prefixed_get(attrs, 'TokenType', '0')
+                or '0'
+            ),
+            'level': str(self._prefixed_get(attrs, 'Tokenlevel', '0') or '0'),
+            'issue_date': issue_date,
+            'activate_date': activate_date,
+            'deactivate_date': deactivate_date,
         }
