@@ -119,7 +119,8 @@ class SettingsWindow:
         self.avigilon_pass.insert(0, avigilon.get('password', ''))
         self.avigilon_pass.pack(fill=tk.X, pady=(0, 8))
 
-        ttk.Button(main_frame, text="Test Avigilon Connection", command=self._test_avigilon).pack(anchor=tk.W, pady=(0, 16))
+        self.test_button = ttk.Button(main_frame, text="Test Avigilon Connection", command=self._test_avigilon)
+        self.test_button.pack(anchor=tk.W, pady=(0, 16))
 
         # --- Info ---
         ttk.Label(
@@ -201,7 +202,6 @@ class SettingsWindow:
         messagebox.showinfo("Saved", "Configuration saved successfully.")
 
     def _test_avigilon(self):
-        from src.avigilon_client import AvigilonClient
         host = self.avigilon_host.get().strip()
         user = self.avigilon_user.get().strip()
         pwd = self.avigilon_pass.get()
@@ -215,22 +215,45 @@ class SettingsWindow:
             logger.warning("Test aborted: missing host, username, or password")
             messagebox.showwarning("Missing", "Fill in host, username, and password first.")
             return
+
+        # Run the network call in a background thread so the Tk UI doesn't
+        # freeze. The XML identity endpoint can take several seconds on
+        # deployments with many identities.
+        self.test_button.configure(state=tk.DISABLED, text="Testing...")
+        threading.Thread(
+            target=self._test_avigilon_worker,
+            args=(host, user, pwd),
+            daemon=True,
+            name="AvigilonTestConnection",
+        ).start()
+
+    def _test_avigilon_worker(self, host: str, user: str, pwd: str):
+        from src.avigilon_client import AvigilonClient
         try:
             client = AvigilonClient(host, user, pwd)
             ok = client.test_connection()
             if ok:
                 logger.info("Test Avigilon Connection: SUCCESS")
-                messagebox.showinfo("Success", "Connected to Avigilon successfully!")
+                self.root.after(0, self._test_avigilon_done, 'success', None)
             else:
                 logger.error("Test Avigilon Connection: FAILED (see log above for details)")
-                messagebox.showerror(
-                    "Failed",
-                    "Could not connect. Check credentials and host.\n\n"
-                    "See the Log panel below for details.",
-                )
+                self.root.after(0, self._test_avigilon_done, 'failed', None)
         except Exception as e:
             logger.exception(f"Test Avigilon Connection: EXCEPTION {type(e).__name__}: {e}")
-            messagebox.showerror("Error", f"{type(e).__name__}: {e}")
+            self.root.after(0, self._test_avigilon_done, 'error', f"{type(e).__name__}: {e}")
+
+    def _test_avigilon_done(self, outcome: str, message):
+        self.test_button.configure(state=tk.NORMAL, text="Test Avigilon Connection")
+        if outcome == 'success':
+            messagebox.showinfo("Success", "Connected to Avigilon successfully!")
+        elif outcome == 'failed':
+            messagebox.showerror(
+                "Failed",
+                "Could not connect. Check credentials and host.\n\n"
+                "See the Log panel below for details.",
+            )
+        else:
+            messagebox.showerror("Error", message or "Unknown error")
 
     def _copy_log(self):
         self.log_text.configure(state=tk.NORMAL)
