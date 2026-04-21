@@ -281,13 +281,46 @@ class AvigilonClient:
         return []
 
     def get_identities_xml(self) -> List[Dict]:
-        """Fetch identities via XML endpoint."""
-        resp = self._request('GET', '/identities.xml')
+        """Fetch identities via XML endpoint.
+
+        The controller only populates @identities when a search runs, so
+        we mirror the search params the Avigilon UI sends. Empty lnam/fnam
+        plus letter_search=true attempts a "show all" search; if the server
+        requires a letter filter, caller can loop A-Z instead.
+        """
+        resp = self._request(
+            'GET', '/identities.xml',
+            params={
+                'quick_search': 'true',
+                'lnam': '',
+                'fnam': '',
+                'tkn': '',
+                'qck_search_and_or': '&',
+                'search_pattern_fnam': '2',
+                'search_pattern_lnam': '2',
+                'group_id': '',
+                'letter_search': 'true',
+            },
+            headers={
+                'X-CSRF-Token': self.csrf_token,
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/xml, */*',
+                'Referer': f'{self.base_url}/identities',
+            },
+        )
+        logger.info(
+            f"get_identities_xml: status={resp.status_code} "
+            f"content_length={len(resp.content)} elapsed={resp.elapsed.total_seconds():.2f}s"
+        )
         if resp.status_code != 200:
             logger.error(f"get_identities_xml: HTTP {resp.status_code}")
             return []
+        body_preview = (resp.text or '')[:300].replace('\n', ' ')
+        logger.debug(f"get_identities_xml body (first 300 chars): {body_preview!r}")
         try:
-            return self._parse_identities_xml(resp.text)
+            parsed = self._parse_identities_xml(resp.text)
+            logger.info(f"get_identities_xml: parsed {len(parsed)} identities")
+            return parsed
         except Exception as e:
             logger.error(f"XML identity parse failed: {e}")
         return []
@@ -444,6 +477,21 @@ class AvigilonClient:
     # XML parsing
     # ------------------------------------------------------------------
 
+    # Avigilon Unity was originally branded "plasec"; some deployments still
+    # return element names with the plasec prefix. Accept either.
+    _XML_PREFIXES = ('avigilon', 'plasec')
+
+    def _find_prefixed(self, elem, suffix: str):
+        for prefix in self._XML_PREFIXES:
+            found = elem.find(f'{prefix}{suffix}')
+            if found is not None:
+                return found
+        return None
+
+    def _prefixed_text(self, elem, suffix: str) -> str:
+        found = self._find_prefixed(elem, suffix)
+        return found.text if found is not None and found.text else ''
+
     def _parse_identities_xml(self, xml_text: str) -> List[Dict]:
         """Parse XML identity list into normalized dicts."""
         root = ET.fromstring(xml_text)
@@ -451,14 +499,10 @@ class AvigilonClient:
         for identity_elem in root.findall('identity'):
             cn_elem = identity_elem.find('.//cn')
             cn = cn_elem.text if cn_elem is not None else ''
-            fname_elem = identity_elem.find('avigilonFname')
-            lname_elem = identity_elem.find('avigilonLname')
-            name_elem = identity_elem.find('avigilonName')
-            status_elem = identity_elem.find('avigilonIdstatus')
 
-            first_name = fname_elem.text if fname_elem is not None else ''
-            last_name = lname_elem.text if lname_elem is not None else ''
-            avigilon_name = name_elem.text if name_elem is not None else ''
+            first_name = self._prefixed_text(identity_elem, 'Fname')
+            last_name = self._prefixed_text(identity_elem, 'Lname')
+            avigilon_name = self._prefixed_text(identity_elem, 'Name')
 
             if not first_name and not last_name and avigilon_name:
                 parts = [p.strip() for p in avigilon_name.split(',')]
@@ -466,19 +510,19 @@ class AvigilonClient:
                 first_name = parts[1] if len(parts) > 1 else ''
 
             full_name = f"{first_name} {last_name}".strip() or avigilon_name
-            raw_status = status_elem.text if status_elem is not None else '1'
+            raw_status = self._prefixed_text(identity_elem, 'Idstatus') or '1'
 
             results.append({
                 'id': cn,
                 'first_name': first_name or '',
                 'last_name': last_name or '',
                 'full_name': full_name,
-                'email': '',
-                'phone': '',
-                'work_phone': '',
+                'email': self._prefixed_text(identity_elem, 'identityEmailaddress'),
+                'phone': self._prefixed_text(identity_elem, 'identityPhone'),
+                'work_phone': self._prefixed_text(identity_elem, 'identityWorkphone'),
                 'status': self._normalize_identity_status(raw_status),
-                'title': '',
-                'department': '',
+                'title': self._prefixed_text(identity_elem, 'identityTitle'),
+                'department': self._prefixed_text(identity_elem, 'identityDepartment'),
             })
         return results
 
@@ -490,22 +534,21 @@ class AvigilonClient:
             cn_elem = token_elem.find('.//cn')
             cn = cn_elem.text if cn_elem is not None else ''
 
-            def _text(tag):
-                el = token_elem.find(tag)
-                return el.text if el is not None and el.text else ''
+            def _text(suffix: str) -> str:
+                return self._prefixed_text(token_elem, suffix)
 
             results.append({
                 'id': cn,
                 'identity_id': identity_id,
-                'internal_number': _text('avigilonInternalnumber'),
-                'embossed_number': _text('avigilonEmbossednumber'),
-                'pin': _text('avigilonPIN'),
-                'status': _text('avigilonTokenstatus') or '1',
-                'token_type': _text('avigilonTokenType') or '0',
-                'level': _text('avigilonTokenlevel') or '0',
-                'issue_date': _text('avigilonIssuedate'),
-                'activate_date': _text('avigilonActivatedate'),
-                'deactivate_date': _text('avigilonDeactivatedate'),
+                'internal_number': _text('Internalnumber'),
+                'embossed_number': _text('Embossednumber'),
+                'pin': _text('PIN'),
+                'status': _text('Tokenstatus') or '1',
+                'token_type': _text('TokenType') or '0',
+                'level': _text('Tokenlevel') or '0',
+                'issue_date': _text('Issuedate'),
+                'activate_date': _text('Activatedate'),
+                'deactivate_date': _text('Deactivatedate'),
             })
         return results
 
