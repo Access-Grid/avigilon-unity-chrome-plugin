@@ -47,6 +47,7 @@ class AvigilonClient:
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': HTTP_USER_AGENT})
         self._logged_in = False
+        self._csrf_meta_token = ''
 
         if not verify_ssl:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -59,7 +60,19 @@ class AvigilonClient:
 
     @property
     def csrf_token(self) -> str:
-        return self.session.cookies.get('XSRF-TOKEN', '')
+        # Avigilon Unity puts the CSRF token in a <meta name="csrf-token"> tag
+        # rather than a cookie. Prefer the value scraped from the login body;
+        # fall back to the cookie for deployments that expose it there.
+        return self._csrf_meta_token or self.session.cookies.get('XSRF-TOKEN', '')
+
+    @staticmethod
+    def _extract_csrf_meta(html: str) -> str:
+        m = re.search(
+            r'<meta[^>]+name=["\']csrf-token["\'][^>]+content=["\']([^"\']+)["\']',
+            html or '',
+            re.IGNORECASE,
+        )
+        return m.group(1) if m else ''
 
     def login(self) -> bool:
         login_url = f"{self.base_url}/sessions"
@@ -91,10 +104,18 @@ class AvigilonClient:
 
             if self.session.cookies.get('_session_id'):
                 self._logged_in = True
+                self._csrf_meta_token = self._extract_csrf_meta(resp.text)
+                cookie_csrf = self.session.cookies.get('XSRF-TOKEN', '')
                 logger.info(
                     f"Avigilon login SUCCESS: _session_id cookie present, "
-                    f"XSRF-TOKEN={'set' if self.csrf_token else 'missing'}"
+                    f"csrf from meta={'set' if self._csrf_meta_token else 'missing'}, "
+                    f"csrf from cookie={'set' if cookie_csrf else 'missing'}"
                 )
+                if not self._csrf_meta_token and not cookie_csrf:
+                    logger.warning(
+                        "No CSRF token found in login response (neither HTML meta "
+                        "tag nor XSRF-TOKEN cookie). Write operations may be rejected."
+                    )
                 return True
             if resp.status_code == 404:
                 logger.error(
@@ -200,39 +221,11 @@ class AvigilonClient:
     # ------------------------------------------------------------------
 
     def get_all_identities(self) -> List[Dict]:
-        page = 1
-        per_page = 100
-        result: Dict[str, Dict] = {}
-
-        while True:
-            resp = self._request(
-                'GET', '/identities.json',
-                params={'page': page, 'perpage': per_page, 'sort_by': 'avigilonName', 'order': 'ascend'},
-                headers={'Accept': 'application/json'},
-            )
-            if resp.status_code != 200:
-                logger.error(f"get_all_identities page {page}: HTTP {resp.status_code}")
-                break
-            try:
-                body = resp.json()
-            except Exception as e:
-                logger.error(f"Identity list JSON parse failed: {e}")
-                break
-
-            items = body.get('data', [])
-            for raw in items:
-                ident = self._normalize_identity(raw)
-                if ident.get('id'):
-                    result[ident['id']] = ident
-
-            meta = body.get('meta', {})
-            total = meta.get('recordsFiltered', 0)
-            if page * per_page >= total or not items:
-                break
-            page += 1
-
-        logger.debug(f"Found {len(result)} identities")
-        return list(result.values())
+        # Avigilon Unity's /identities.json returns 406 — the controller only
+        # offers HTML/XML representations. Use the XML search endpoint.
+        identities = self.get_identities_xml()
+        logger.debug(f"Found {len(identities)} identities (via XML)")
+        return identities
 
     def get_identity(self, identity_id: str) -> Optional[Dict]:
         resp = self._request(
@@ -432,12 +425,17 @@ class AvigilonClient:
             else:
                 logger.info("test_connection: session already authenticated, skipping login()")
 
-            probe_path = '/identities.json'
-            logger.info(f"test_connection: probing GET {self.base_url}{probe_path}?page=1&perpage=1")
+            probe_path = '/identities.xml'
+            logger.info(f"test_connection: probing GET {self.base_url}{probe_path}")
             resp = self._request(
                 'GET', probe_path,
-                params={'page': 1, 'perpage': 1},
-                headers={'Accept': 'application/json'},
+                params={
+                    'identity_search_exec_search': 'true',
+                    'adv_search_exec_search': 'true',
+                    'quick_search': 'true',
+                    'qck_search_and_or': '&',
+                },
+                headers={'X-CSRF-Token': self.csrf_token, 'X-Requested-With': 'XMLHttpRequest'},
             )
             logger.info(
                 f"test_connection: probe response status={resp.status_code} "
